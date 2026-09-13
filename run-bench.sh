@@ -125,6 +125,7 @@ for m in "${SEL[@]}"; do
   PREFIX=(); [ -n "$LAUNCH_PREFIX" ] && PREFIX=($LAUNCH_PREFIX)
   ARGS=("${PREFIX[@]}" "$BIN_R" -m "$MODEL_R" --host "$HOST" --port "$PORT_R" --device "$dev")
   [ -n "$split" ] && ARGS+=(--split-mode "$split")
+  [ -n "$TENSOR_SPLIT" ] && [ "$split" = tensor ] && ARGS+=(--tensor-split "$TENSOR_SPLIT")
   ARGS+=(-ngl "$NGL" -fa "$FA" -c "$CTX_R" --parallel 1 -t "$THREADS")
   [ "$JINJA" = 1 ] && ARGS+=(--jinja)
   [ -n "$KV_K" ] && ARGS+=(--cache-type-k "$KV_K")
@@ -184,11 +185,11 @@ done
 
 # config snapshot for the plotter
 MODESPEC=$(printf '%s;' "${SEL[@]}")
-python3 - "$TAGDIR" "$TAG" "$CTX_R" "$STAGES_R" "$NP_R" "$MODESPEC" "$MACHINE" "$BIN_R" "$KV_K" "$KV_V" "$LAUNCH_PREFIX" <<'PYEOF'
+python3 - "$TAGDIR" "$TAG" "$CTX_R" "$STAGES_R" "$NP_R" "$MODESPEC" "$MACHINE" "$BIN_R" "$KV_K" "$KV_V" "$LAUNCH_PREFIX" "$TENSOR_SPLIT" <<'PYEOF'
 import hashlib, json, os, shutil, socket, subprocess, sys, datetime
 from collections import Counter
 
-d, tag, ctx, stages, npred, modespec, machine, binp, kvk, kvv, lprefix = sys.argv[1:12]
+d, tag, ctx, stages, npred, modespec, machine, binp, kvk, kvv, lprefix, tsplit = sys.argv[1:13]
 
 def sh(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
@@ -222,7 +223,8 @@ info = {"tag": tag, "date": datetime.datetime.now().astimezone().isoformat(times
         "ctx": int(ctx), "stages": stages, "n_predict": int(npred),
         "modes": modes, "machine": machine,
         "bin": binp, "bin_version": ver, "bin_sha256": sha,
-        "cache_k": kvk, "cache_v": kvv, "launch_prefix": lprefix}
+        "cache_k": kvk, "cache_v": kvv, "launch_prefix": lprefix,
+        "tensor_split": tsplit}
 with open(f"{d}/run-info.json", "w") as f:
     json.dump(info, f, ensure_ascii=False, indent=2)
 print("run-info.json written")

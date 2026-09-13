@@ -14,7 +14,7 @@
 
 **得られるもの** — マシンごとに1コマンドで: 実測に基づく答え(layer / tensor / 単一GPU)、比較図(日英)、そして他者が検証できる生の証跡(`run-info.json`、段ごとのJSON、サンプラログ)。
 
-**ビルド・環境への依存** — 本ツールは `llama-server` バイナリと HTTP(`/completion` とその `timings` フィールド)しか使いません。SM(アーキテクチャ)固有のコードは一切なく、任意アーキテクチャ向けのCUDAビルドでも、他バックエンド(ROCm、Vulkan、Metal、CPU)でも動きます(バイナリは `bench.conf` の値)。NVIDIA限定の付加機能(外部プロセスガード、GPUサンプラ)は他環境では自動でオフに縮退し、投機デコードは任意(`SPEC_ARGS=""` で無効)。サーバの起動コマンドは完全に設定可能(FAQ参照)で、`LAUNCH_PREFIX` が `numactl`/`taskset`/`env` 等の前置に対応します。**検証状況:** Linux + CUDA(sm70、V100×2)でE2E検証済み。他バックエンド/アーキテクチャは未検証 — まず4分のスモークを実行してください。
+**ビルド・環境への依存** — 本ツールは `llama-server` バイナリと HTTP(`/completion` とその `timings` フィールド)しか使いません。SM(アーキテクチャ)固有のコードは一切なく、任意アーキテクチャ向けのCUDAビルドでも、他バックエンド(ROCm、Vulkan、Metal、CPU)でも動きます(バイナリは `bench.conf` の値)。NVIDIA限定の付加機能(外部プロセスガード、GPUサンプラ)は他環境では自動でオフに縮退し、投機デコードは任意(`SPEC_ARGS=""` で無効)。サーバの起動コマンドは完全に設定可能(FAQ参照)で、`LAUNCH_PREFIX` が `numactl`/`taskset`/`env` 等の前置に対応します。**GPU枚数は設定であってコードではありません:** 何枚でも動きます — `DEVICES=CUDA0,CUDA1,CUDA2,CUDA3` で4枚分割、`TENSOR_SPLIT` で不均等な重み比、`MODES`/`--mode-spec` で任意の構成、`--mode-spec "s1|CUDA1|"` のようなカード毎の単一GPUベースライン。**検証状況:** Linux + CUDA(sm70、V100×2)でE2E検証済み。3枚以上・他バックエンド・他アーキテクチャは同一コード経路ですが未検証 — まず4分のスモークを実行してください。
 
 **対象読者** — 「このモデルをGPUに分割すべきか、どの方式か」に答える必要がある人: ワークステーション構築者、単機LLM運用者、そしてAIエージェント(次節)。数値は仕様として環境依存で、ユーザー間で一定なのは手順と証跡の形式です。
 
@@ -120,7 +120,7 @@ bash run-bench.sh p2 --mode-spec "myarm|CUDA0,CUDA1|tensor" # 名前と構成を
 - **モデルがQwenでない/MTP非対応の場合は?** `bench.conf`の`SPEC_ARGS`を空にすれば他は全てモデル非依存です。実プロンプト補正用のプロンプトは`measure_real.py --prompts-json`で差し替えできます(スクリプト参照)。
 - **同じタグで再実行すると?** 仕様として拒否します(前回の`results-*-pp0.json`/`results-real.json`が新しい図に混入するため)。新しいタグを使ってください(`--reuse`は意図的な追記専用)。
 - **単一GPUとの比較はいらない場合は?** 2通り: そのモードを実行しない(`--modes layer,tensor` — ④は自動非表示になり、単一GPU計測の時間も節約)、または`bench.conf`で`VS_PANEL=off`(単発の描き直しなら`--vs off`)。
-- **サーバの起動コマンドは変えられる?** argvは`bench.conf`から組み立てます(`BIN`, `LAUNCH_PREFIX`, `MODEL`, `MMPROJ`, `DEVICES`/`MODES`, `NGL`, `THREADS`, `FA`, `JINJA`, `KV_K/V`, `SPEC_ARGS`, `SPEC_DEVICE`, `LOAD_MODE`, `CACHE_ARGS`, `HOST`, `PORT`, `EXTRA_ARGS`)。任意フラグは`EXTRA_ARGS`で追記、`numactl`/`taskset`/`env`等の前置は`LAUNCH_PREFIX`、ラッパースクリプトを使うなら`BIN`に指定。実際のargv構成要素とバイナリのハッシュは毎回`run-info.json`に記録されます(他者と比較する際の証跡)。
+- **サーバの起動コマンドは変えられる?** argvは`bench.conf`から組み立てます(`BIN`, `LAUNCH_PREFIX`, `MODEL`, `MMPROJ`, `DEVICES`/`MODES`, `NGL`, `THREADS`, `FA`, `JINJA`, `KV_K/V`, `SPEC_ARGS`, `SPEC_DEVICE`, `TENSOR_SPLIT`, `LOAD_MODE`, `CACHE_ARGS`, `HOST`, `PORT`, `EXTRA_ARGS`)。任意フラグは`EXTRA_ARGS`で追記、`numactl`/`taskset`/`env`等の前置は`LAUNCH_PREFIX`、ラッパースクリプトを使うなら`BIN`に指定。実際のargv構成要素とバイナリのハッシュは毎回`run-info.json`に記録されます(他者と比較する際の証跡)。
 - **1構成だけ計測したい(比較不要)場合は?** `--profile` で現在の `DEVICES` を1本の腕として計測し、prefill/decodeの2パネル図を生成します。`--mode-spec "名前|デバイス|split"`(複数指定可)で任意の腕を定義できます(例: `--mode-spec "gpu0|CUDA0|"` で単カード)。
 
 ## ファイル構成

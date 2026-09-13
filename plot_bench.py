@@ -263,7 +263,7 @@ def main():
                 pf[0] = (pp0[s] / pp0[bl] - 1) * 100
             vals.append((s, "pf", pf))
             vals.append((s, "de", de))
-        k = len(vals); bw = 0.2
+        k = len(vals); bw = min(0.2, 0.8 / k)
         xpos = range(len(dep))
         for idx, (s, metric, vv) in enumerate(vals):
             off = (idx - (k - 1) / 2) * bw
