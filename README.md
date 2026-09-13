@@ -1,3 +1,5 @@
+**日本語版はこちら → [README.ja.md](README.ja.md)**
+
 # llama-split-bench
 
 Measure **which llama.cpp split mode is actually faster on your multi-GPU box** — `--split-mode layer` (pipeline, the default) or `--split-mode tensor` (TP) — and how much a second (or third) GPU really buys.
