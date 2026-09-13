@@ -283,8 +283,9 @@ def main():
         ax4.legend(fontsize=8.5, ncol=2)
         for idx, (s, metric, vv) in enumerate(vals):
             off = (idx - (k - 1) / 2) * bw
+            lfs = 6.5 if k <= 4 else 5.2
             for x, v in zip(xpos, vv):
-                ax4.text(x + off, v + (1.2 if v >= 0 else -5.5), f"{v:.0f}", ha="center", fontsize=6.5)
+                ax4.text(x + off, v + (1.2 if v >= 0 else -5.5), f"{v:.0f}", ha="center", fontsize=lfs)
 
     # ---- suptitle ----
     deep = max(r["effective_depth"] for r in data[series[0]]) / 1000
