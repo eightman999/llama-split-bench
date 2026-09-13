@@ -64,7 +64,17 @@ bash run-bench.sh t1 --modes tensor
 | ③ | 先頭2系列の相対差(例: tensor vs layer) |
 | ④ | ベースライン(既定=単一GPU)に対する伸び率。そのモードが実行に無ければ自動非表示 |
 
-端点の数字は各パネル右端の内側に描かれます(太字=実測、細字=推定)。「対単一GPU」パネルと破線推定はオフにでき(`--vs off` / `--estimate off`、実行全体に適用するなら`bench.conf`で`VS_PANEL=off`—4つ目のパネルが消えて図が再配置されます)、再計測なしで任意の系列サブセットだけ描き直せます:
+端点の数字は各パネル右端の内側に描かれます(太字=実測、細字=推定)。どの要素も再計測なしで切り替え可能です。**`--vs off`(実行全体に適用するなら`bench.conf`の`VS_PANEL=off`)で4つ目のパネルが消え、図が再配置されます**:
+
+| オプション | フラグ / 設定 | 効果 |
+|---|---|---|
+| 対単一GPUパネル | `--vs off` · `VS_PANEL=off` (bench.conf) | **④が消える** — 単一GPUを測っていない場合、または比較が不要な場合 |
+| 実運用推定線 | `--estimate off` | 薄い破線と補正係数の注記を非表示 |
+| ベースライン | `--baseline <モード名>` · `BASELINE` (bench.conf) | ④が比較する相手(既定=`single`。そのモードが実行に無ければ自動非表示) |
+| 系列の絞り込み | `--series layer,tensor` | 指定した実行だけを描画 |
+| 言語 | `--lang ja` · `--lang en` | 日本語 / 英語の図 |
+
+再計測なしの描き直し例:
 
 ```bash
 ~/.venvs/bench-plot/bin/python plot_bench.py --dir runs/my-run-1 \
@@ -80,6 +90,7 @@ bash run-bench.sh t1 --modes tensor
 - **なぜ各段1000トークン生成?** 定常decodeはMTP採択のばらつきを均すのに数百トークン必要なため。100では心もとなく、1000で図に載る精度になります。
 - **モデルがQwenでない/MTP非対応の場合は?** `bench.conf`の`SPEC_ARGS`を空にすれば他は全てモデル非依存です。実プロンプト補正用のプロンプトは`measure_real.py --prompts-json`で差し替えできます(スクリプト参照)。
 - **同じタグで再実行すると?** 仕様として拒否します(前回の`results-*-pp0.json`/`results-real.json`が新しい図に混入するため)。新しいタグを使ってください(`--reuse`は意図的な追記専用)。
+- **単一GPUとの比較はいらない場合は?** 2通り: そのモードを実行しない(`--modes layer,tensor` — ④は自動非表示になり、単一GPU計測の時間も節約)、または`bench.conf`で`VS_PANEL=off`(単発の描き直しなら`--vs off`)。
 
 ## ファイル構成
 

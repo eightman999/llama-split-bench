@@ -64,7 +64,17 @@ bash run-bench.sh t1 --modes tensor
 | ③ | relative difference between the first two series (e.g. tensor vs layer) |
 | ④ | speedup vs the baseline mode (default: `single`; auto-hidden when that mode is not in the run) |
 
-Endpoint numbers sit inside the right edge of each panel — bold = measured, light = estimate. The "vs single-GPU" panel and the dashed estimates can be switched off (`--vs off`, `--estimate off`; set `VS_PANEL=off` in `bench.conf` to apply it to the whole run — the 4th panel disappears and the figure reflows), and any subset of series can be re-plotted without re-measuring:
+Endpoint numbers sit inside the right edge of each panel — bold = measured, light = estimate. Every element can be toggled without re-measuring; **`--vs off` (or `VS_PANEL=off` in `bench.conf`, which applies to the whole run) removes the 4th panel and reflows the figure**:
+
+| option | flag / config | effect |
+|---|---|---|
+| vs-single panel | `--vs off` · `VS_PANEL=off` (bench.conf) | **panel ④ disappears** — for runs without a single-GPU baseline, or when you don't want the comparison |
+| real-operation estimate | `--estimate off` | hide the thin dashed curves and the factor note |
+| baseline mode | `--baseline <mode>` · `BASELINE` (bench.conf) | which mode panel ④ compares against (default `single`; auto-hidden when that mode is not in the run) |
+| series subset | `--series layer,tensor` | plot only the given runs |
+| language | `--lang ja` · `--lang en` | Japanese / English figure |
+
+Re-render without re-measuring:
 
 ```bash
 ~/.venvs/bench-plot/bin/python plot_bench.py --dir runs/my-run-1 \
@@ -80,6 +90,7 @@ Endpoint numbers sit inside the right edge of each panel — bold = measured, li
 - **Why 1000 generated tokens per stage?** Steady-state decode needs a few hundred tokens to average out MTP acceptance variance; 100 fits pipelines but 1000 fits figures.
 - **My model isn't Qwen / doesn't support MTP.** Leave `SPEC_ARGS` empty in `bench.conf`; everything else is model-agnostic. The real-prompt factor prompt set can be replaced with `measure_real.py --prompts-json` (see the script).
 - **Re-running with the same tag?** Refused by design: stale `results-*-pp0.json` / `results-real.json` from the older run would silently mix into the new figures. Use a new tag (`--reuse` overrides, only for deliberate appends).
+- **Can I skip the single-GPU comparison?** Yes, two ways: don't run that mode (`--modes layer,tensor` — panel ④ auto-hides and you save the single-GPU run time), or keep the run and set `VS_PANEL=off` in `bench.conf` (for a one-off re-render: `--vs off`).
 
 ## Files
 
