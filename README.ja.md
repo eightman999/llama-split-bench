@@ -4,7 +4,7 @@
 
 **マルチGPUマシンで、llama.cppの `--split-mode layer`(パイプライン分割・デフォルト)と `--split-mode tensor`(TP)のどちらが実際に速いのか**、そして2枚目以降のGPUがどれだけ効くのかを計測するツールです。
 
-設定ファイル1つ、コマンド1つで、調整は不要です。各モードについて目的のコンテキストサイズまでの深度ラダーを実行し、prefill / decode スループット(投機デコードの採択率込み)を記録し、実プロンプト計測でdecodeを補正し、比較図(日本語・英語)を自動生成します。
+設定ファイル1つ、コマンド1つで、調整は不要です。各モードについて目的のコンテキストサイズまでの深度ラダーを実行し、prefill / decode スループット(投機デコードの採択率込み)を記録し、実プロンプト計測でdecodeを補正し、比較図(日本語・英語)を自動生成します。ワークフロー全体が非対話・機械可読で、人間と同様に**AIエージェントが操作することを前提に設計**しています(「AIエージェントに使わせる前提の設計」参照)。
 
 ![example](examples/example-2xv100-3way-ja.png)
 
@@ -79,6 +79,10 @@ prefill/decode だけを計測したい場合(layer/tensor比較は不要):
 bash run-bench.sh p1 --profile                              # 現在のDEVICES・既定splitで2パネル図
 bash run-bench.sh p2 --mode-spec "myarm|CUDA0,CUDA1|tensor" # 名前と構成を自由に指定
 ```
+
+![profile例](examples/example-profile-2xv100-ja.png)
+
+*`--profile` の出力例(参照環境): 単一構成(tensor、262kラダー)のprefill/decodeを2パネルで作図。比較不要でも同じプロトコルが適用されます。薄破線=実運用推定。*
 
 ## 図の読み方
 

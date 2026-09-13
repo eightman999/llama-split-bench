@@ -4,7 +4,7 @@
 
 Measure **which llama.cpp split mode is actually faster on your multi-GPU box** — `--split-mode layer` (pipeline, the default) or `--split-mode tensor` (TP) — and how much a second (or third) GPU really buys.
 
-One config file, one command, no adjustments: for each mode it runs a context-depth ladder up to your target context size, records prefill / decode throughput (including speculative-decoding acceptance), corrects decode with real-prompt measurements, and renders the comparison figure in Japanese and English.
+One config file, one command, no adjustments: for each mode it runs a context-depth ladder up to your target context size, records prefill / decode throughput (including speculative-decoding acceptance), corrects decode with real-prompt measurements, and renders the comparison figure in Japanese and English. The whole workflow is non-interactive and machine-readable — designed to be driven by AI agents as well as humans (see *Designed to be driven by AI agents* below).
 
 ![example](examples/example-2xv100-3way-en.png)
 
@@ -79,6 +79,10 @@ Just the prefill/decode numbers for one configuration (no layer/tensor compariso
 bash run-bench.sh p1 --profile                              # current DEVICES, default split -> 2-panel figure
 bash run-bench.sh p2 --mode-spec "myarm|CUDA0,CUDA1|tensor" # arbitrary arm(s) with custom names
 ```
+
+![profile example](examples/example-profile-2xv100-en.png)
+
+*Example `--profile` output (reference box): prefill and decode for a single arm — tensor split, 262k ladder. Same protocol, 2-panel figure, no comparison required. Thin dashed = real-operation estimate.*
 
 ## Reading the figure
 
