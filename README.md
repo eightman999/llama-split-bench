@@ -64,7 +64,7 @@ bash run-bench.sh t1 --modes tensor
 | ③ | relative difference between the first two series (e.g. tensor vs layer) |
 | ④ | speedup vs the baseline mode (default: `single`; auto-hidden when that mode is not in the run) |
 
-Endpoint numbers sit inside the right edge of each panel — bold = measured, light = estimate. The "vs single-GPU" panel and the dashed estimates can be switched off (`--vs off`, `--estimate off`), and any subset of series can be re-plotted without re-measuring:
+Endpoint numbers sit inside the right edge of each panel — bold = measured, light = estimate. The "vs single-GPU" panel and the dashed estimates can be switched off (`--vs off`, `--estimate off`; set `VS_PANEL=off` in `bench.conf` to apply it to the whole run — the 4th panel disappears and the figure reflows), and any subset of series can be re-plotted without re-measuring:
 
 ```bash
 ~/.venvs/bench-plot/bin/python plot_bench.py --dir runs/my-run-1 \

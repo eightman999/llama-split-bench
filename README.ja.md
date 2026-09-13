@@ -64,7 +64,7 @@ bash run-bench.sh t1 --modes tensor
 | ③ | 先頭2系列の相対差(例: tensor vs layer) |
 | ④ | ベースライン(既定=単一GPU)に対する伸び率。そのモードが実行に無ければ自動非表示 |
 
-端点の数字は各パネル右端の内側に描かれます(太字=実測、細字=推定)。「対単一GPU」パネルと破線推定はオフにでき(`--vs off` / `--estimate off`)、再計測なしで任意の系列サブセットだけ描き直せます:
+端点の数字は各パネル右端の内側に描かれます(太字=実測、細字=推定)。「対単一GPU」パネルと破線推定はオフにでき(`--vs off` / `--estimate off`、実行全体に適用するなら`bench.conf`で`VS_PANEL=off`—4つ目のパネルが消えて図が再配置されます)、再計測なしで任意の系列サブセットだけ描き直せます:
 
 ```bash
 ~/.venvs/bench-plot/bin/python plot_bench.py --dir runs/my-run-1 \

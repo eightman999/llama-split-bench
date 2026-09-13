@@ -219,7 +219,7 @@ PYEOF
 SERIES_NAMES=$(printf '%s\n' "${SEL[@]}" | cut -d'|' -f1 | paste -sd,)
 for LANG in ja en; do
   "$VENV_PY" "$HERE/plot_bench.py" --dir "$TAGDIR" --series "$SERIES_NAMES" --lang "$LANG" \
-    --baseline "$BASELINE" --out split-bench \
+    --baseline "$BASELINE" --vs "$VS_PANEL" --out split-bench \
     || echo "plot($LANG) failed - check VENV_PY/matplotlib (see README)"
 done
 echo "BENCH-DONE $TAG $(date +%H:%M:%S)"
