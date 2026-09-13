@@ -39,15 +39,25 @@ done
 [ -z "$TAG" ] && { echo "usage: run-bench.sh <tag> [--modes a,b] [--devices ...] [--ctx N] [--stages S] [--n-predict N] [--no-real] [--reuse] [--profile | --mode-spec name|dev|split]"; exit 1; }
 case "$TAG" in */*|.*) echo "ERROR: tag '$TAG' must not contain '/' or start with '.'"; exit 1;; esac
 [ -z "$MODEL_R" ] && { echo "ERROR: MODEL is not set - put it in bench.conf or bench.local.conf (see README)"; exit 1; }
+[ -f "$MODEL_R" ] || { echo "ERROR: MODEL file not found: $MODEL_R"; exit 1; }
+[ -n "$MMPROJ" ] && [ ! -f "$MMPROJ" ] && { echo "ERROR: MMPROJ file not found: $MMPROJ"; exit 1; }
+if [ -d "$BIN_R" ]; then echo "ERROR: BIN '$BIN_R' is a directory, not an executable"; exit 1; fi
 command -v "$BIN_R" >/dev/null 2>&1 || [ -x "$BIN_R" ] || { echo "ERROR: binary '$BIN_R' not found"; exit 1; }
+if ! "$VENV_PY" -c "import matplotlib" >/dev/null 2>&1; then
+  echo "WARNING: '$VENV_PY' cannot import matplotlib - figures will fail at the end."
+  echo "         one-time setup: python3 -m venv ~/.venvs/bench-plot && ~/.venvs/bench-plot/bin/pip install matplotlib"
+fi
 
 # mode selection precedence: --profile > --mode-spec > --devices > MODES (conf) > auto
+# (--devices is applied first so --profile/--mode-spec with an explicit device list work as written)
+if [ -n "$DEVICES_R" ]; then
+  DEVICES="$DEVICES_R"
+fi
 if [ "$PROFILE" = 1 ]; then
   MODES=("profile|$DEVICES|")
 elif [ ${#MODE_SPECS[@]} -gt 0 ]; then
   MODES=("${MODE_SPECS[@]}")
 elif [ -n "$DEVICES_R" ]; then
-  DEVICES="$DEVICES_R"
   SD="$SINGLE_DEV"; [ "$SD" = auto ] && SD="${DEVICES%%,*}"
   MODES=("layer|$DEVICES|layer" "tensor|$DEVICES|tensor" "single|$SD|")
 elif ! declare -p MODES >/dev/null 2>&1; then
@@ -63,7 +73,9 @@ for m in "${MODES[@]}"; do
   name="${m%%|*}"
   if [ -z "$MODES_R" ] || [[ ",$MODES_R," == *",$name,"* ]]; then SEL+=("$m"); fi
 done
-[ ${#SEL[@]} -eq 0 ] && { echo "no modes selected - check the MODES array in bench.conf / --modes"; exit 1; }
+[ ${#SEL[@]} -eq 0 ] && { echo "no modes selected - '$MODES_R' matched none of the configured modes (check --modes spelling or the MODES array in bench.conf)"; exit 1; }
+DUP=$(printf '%s\n' "${SEL[@]}" | cut -d'|' -f1 | sort | uniq -d)
+[ -n "$DUP" ] && { echo "ERROR: duplicate mode name(s): $(echo $DUP | tr '\n' ' ') - every arm needs a unique name (artifacts are named after it)"; exit 1; }
 
 TAGDIR="$RUNS_DIR/$TAG"
 if [ -e "$TAGDIR" ] && [ -n "$(ls -A "$TAGDIR" 2>/dev/null)" ] && [ "$REUSE" != 1 ]; then
@@ -72,7 +84,8 @@ if [ -e "$TAGDIR" ] && [ -n "$(ls -A "$TAGDIR" 2>/dev/null)" ] && [ "$REUSE" != 
   exit 1
 fi
 mkdir -p "$TAGDIR"
-URLHOST="$HOST"; [ "$URLHOST" = "0.0.0.0" ] && URLHOST="127.0.0.1"
+URLHOST="$HOST"
+case "$URLHOST" in 0.0.0.0|::|"") URLHOST="127.0.0.1";; *:*) URLHOST="[$URLHOST]";; esac
 URL="http://$URLHOST:$PORT_R"
 
 # which mode runs the real-prompt correction prompts
@@ -96,6 +109,27 @@ fi
 
 guard_of() { echo "$1" | tr ',' '\n' | sed -n 's/^CUDA\([0-9][0-9]*\)$/\1/p' | paste -sd, -; }
 
+# cleanup state + trapped signal handling (a detached run killed from outside must not
+# leave an orphaned sampler loop or a server holding VRAM/port)
+SRV=""; SAMPLER=""; STOP=""
+reap_port() {
+  if curl -s -m 2 "$URL/health" 2>/dev/null | grep -q '"status":"ok"'; then
+    local opid
+    opid=$(ss -ltnp 2>/dev/null | grep ":$PORT_R " | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
+    [ -n "$opid" ] && { echo "reaping leftover server on port $PORT_R (pid $opid)"; kill "$opid" 2>/dev/null; sleep 1; }
+  fi
+}
+cleanup() {
+  if [ -n "$SRV" ]; then
+    pkill -9 -P "$SRV" 2>/dev/null                    # children first (a wrapper/script server must not orphan them)
+    kill "$SRV" 2>/dev/null; sleep 1; kill -9 "$SRV" 2>/dev/null
+  fi
+  [ -n "$STOP" ] && touch "$STOP" 2>/dev/null
+  if [ -n "$SAMPLER" ]; then kill "$SAMPLER" 2>/dev/null; sleep 1; kill -9 "$SAMPLER" 2>/dev/null; fi
+  reap_port
+}
+trap 'echo "BENCH-ABORT: interrupted - cleaning up"; cleanup; exit 1' TERM INT HUP
+
 # run one measurement step; abort the whole run on a non-zero exit (silent failures
 # would otherwise leave partial results that the plotter cannot use)
 run_measure() {
@@ -103,8 +137,7 @@ run_measure() {
   "$@"; local rc=$?
   if [ "$rc" != 0 ]; then
     echo "BENCH-ABORT: $label failed (rc=$rc)"
-    kill "$SRV" 2>/dev/null; pkill -P "$SRV" 2>/dev/null
-    touch "$STOP" 2>/dev/null; wait $SAMPLER 2>/dev/null
+    cleanup
     exit 1
   fi
 }
@@ -122,7 +155,7 @@ for m in "${SEL[@]}"; do
     done > "$TAGDIR/sampler-$name.log" 2>&1 ) &
   SAMPLER=$!
 
-  PREFIX=(); [ -n "$LAUNCH_PREFIX" ] && PREFIX=($LAUNCH_PREFIX)
+  PREFIX=(); [ -n "$LAUNCH_PREFIX" ] && read -ra PREFIX <<< "$LAUNCH_PREFIX"
   ARGS=("${PREFIX[@]}" "$BIN_R" -m "$MODEL_R" --host "$HOST" --port "$PORT_R" --device "$dev")
   [ -n "$split" ] && ARGS+=(--split-mode "$split")
   [ -n "$TENSOR_SPLIT" ] && [ "$split" = tensor ] && ARGS+=(--tensor-split "$TENSOR_SPLIT")
@@ -131,22 +164,30 @@ for m in "${SEL[@]}"; do
   [ -n "$KV_K" ] && ARGS+=(--cache-type-k "$KV_K")
   [ -n "$KV_V" ] && ARGS+=(--cache-type-v "$KV_V")
   if [ -n "$SPEC_ARGS" ]; then
-    ARGS+=($SPEC_ARGS)
+    SPEC_LIST=(); read -ra SPEC_LIST <<< "$SPEC_ARGS"
+    ARGS+=("${SPEC_LIST[@]}")
     case "$SPEC_ARGS" in *draft*)
       SDV="$SPEC_DEVICE"; [ "$SDV" = auto ] && SDV="$dev"
       ARGS+=(--spec-draft-device "$SDV");;
     esac
   fi
   [ -n "$LOAD_MODE" ] && ARGS+=(--load-mode "$LOAD_MODE")
-  [ -n "$CACHE_ARGS" ] && ARGS+=($CACHE_ARGS)
+  if [ -n "$CACHE_ARGS" ]; then CACHE_LIST=(); read -ra CACHE_LIST <<< "$CACHE_ARGS"; ARGS+=("${CACHE_LIST[@]}"); fi
   [ -n "$MMPROJ" ] && ARGS+=(--mmproj "$MMPROJ")
-  [ -n "$EXTRA_ARGS" ] && ARGS+=($EXTRA_ARGS)
+  if [ -n "$EXTRA_ARGS" ]; then EXTRA_LIST=(); read -ra EXTRA_LIST <<< "$EXTRA_ARGS"; ARGS+=("${EXTRA_LIST[@]}"); fi
   ARGS+=(--alias "$(basename "$MODEL_R" .gguf)")
+  printf '%s\n' "${ARGS[@]}" > "$TAGDIR/argv-$name.txt"   # exact server argv, one arg per line
 
   "${ARGS[@]}" > "$TAGDIR/server-$name.log" 2>&1 &
   SRV=$!
   ok=0
   for i in $(seq 1 120); do
+    if ! kill -0 "$SRV" 2>/dev/null; then
+      echo "BENCH-ABORT: $name server process exited during startup (see $TAGDIR/server-$name.log)"
+      tail -5 "$TAGDIR/server-$name.log" 2>/dev/null
+      cleanup
+      exit 1
+    fi
     if curl -s -m 2 "$URL/health" 2>/dev/null | grep -q '"status":"ok"'; then ok=1; break; fi
     sleep 5
   done
@@ -154,16 +195,16 @@ for m in "${SEL[@]}"; do
   nvidia-smi --query-gpu=index,memory.used --format=csv,noheader 2>/dev/null | tr '\n' ' '; echo
   if [ "$ok" != 1 ]; then
     echo "BENCH-ABORT: $name server not ready (see $TAGDIR/server-$name.log)"
-    kill "$SRV" 2>/dev/null; pkill -P "$SRV" 2>/dev/null; touch "$STOP"; wait $SAMPLER 2>/dev/null
+    cleanup
     exit 1
   fi
 
   run_measure "$name ladder" python3 "$HERE/measure_ladder.py" --tag "$name" --stages "$STAGES_R" \
     --n-predict "$NP_R" --url "$URL" --out "$TAGDIR" --guard-devices "$(guard_of "$dev")" \
-    --ratio-init "$RATIO_INIT"
+    --ratio-init "$RATIO_INIT" --server-pid "$SRV"
   if grep -q '"aborted"' "$TAGDIR/results-$name.json" 2>/dev/null; then
     echo "BENCH-ABORT: $name ladder aborted"
-    kill "$SRV" 2>/dev/null; pkill -P "$SRV" 2>/dev/null; touch "$STOP"; wait $SAMPLER 2>/dev/null
+    cleanup
     exit 1
   fi
   run_measure "$name pp0" python3 "$HERE/measure_pp0.py" --tag "$name" --sizes "$PP0_R" --url "$URL" \
@@ -173,14 +214,10 @@ for m in "${SEL[@]}"; do
     REAL_DONE=1
   fi
 
-  kill "$SRV" 2>/dev/null; sleep 3; kill -9 "$SRV" 2>/dev/null
-  # belt-and-braces: if something still answers on the benchmark port, reap the listener
-  # (name-independent - finds whatever holds $PORT_R instead of pattern-matching the binary)
-  if curl -s -m 2 "$URL/health" 2>/dev/null | grep -q '"status":"ok"'; then
-    OPID=$(ss -ltnp 2>/dev/null | grep ":$PORT_R " | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
-    [ -n "$OPID" ] && { echo "reaping leftover server on port $PORT_R (pid $OPID)"; kill "$OPID" 2>/dev/null; sleep 2; }
-  fi
-  touch "$STOP"; wait $SAMPLER 2>/dev/null
+  pkill -9 -P "$SRV" 2>/dev/null
+  kill "$SRV" 2>/dev/null; sleep 3; kill -9 "$SRV" 2>/dev/null; SRV=""
+  reap_port
+  touch "$STOP"; wait $SAMPLER 2>/dev/null; kill -9 "$SAMPLER" 2>/dev/null; SAMPLER=""
 done
 
 # config snapshot for the plotter
@@ -199,7 +236,8 @@ for m in modespec.split(";"):
     if not m:
         continue
     parts = (m.split("|") + ["", ""])[:3]
-    modes.append({"name": parts[0], "device": parts[1], "split": parts[2]})
+    modes.append({"name": parts[0], "device": parts[1], "split": parts[2],
+                  "argv_file": f"argv-{parts[0]}.txt"})
 
 path = binp if os.path.exists(binp) else shutil.which(binp)
 sha = ""
@@ -229,13 +267,21 @@ with open(f"{d}/run-info.json", "w") as f:
     json.dump(info, f, ensure_ascii=False, indent=2)
 print("run-info.json written")
 PYEOF
+RI_RC=$?
+if [ "$RI_RC" != 0 ]; then echo "BENCH-ABORT: run-info step failed (rc=$RI_RC)"; exit 1; fi
 
 # figures (ja + en)
+PLOT_FAIL=0
 SERIES_NAMES=$(printf '%s\n' "${SEL[@]}" | cut -d'|' -f1 | paste -sd,)
 for LANG in ja en; do
   "$VENV_PY" "$HERE/plot_bench.py" --dir "$TAGDIR" --series "$SERIES_NAMES" --lang "$LANG" \
     --baseline "$BASELINE" --vs "$VS_PANEL" --out split-bench \
-    || echo "plot($LANG) failed - check VENV_PY/matplotlib (see README)"
+    || { echo "plot($LANG) failed - check VENV_PY/matplotlib (see README)"; PLOT_FAIL=1; }
 done
+if [ "$PLOT_FAIL" != 0 ]; then
+  echo "BENCH-FIGFAIL $TAG $(date +%H:%M:%S) (measurements complete; figure rendering failed - see messages above)"
+  exit 1
+fi
 echo "BENCH-DONE $TAG $(date +%H:%M:%S)"
-ls -la "$TAGDIR"/*.png 2>/dev/null
+ls -la "$TAGDIR"/*.png 2>/dev/null || true
+exit 0

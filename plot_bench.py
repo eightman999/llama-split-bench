@@ -64,7 +64,7 @@ def lighten(hexcol, amount=0.55):
 def endpoints_dedupe(rows):
     out = []
     for v, c, style in rows:
-        if any(abs(v - w) <= max(0.05, 0.004 * abs(v)) for w, _, _ in out):
+        if any(abs(v - w) <= max(0.05, 0.0015 * abs(v)) for w, _, _ in out):
             continue
         out.append((v, c, style))
     return out
@@ -102,15 +102,20 @@ def main():
     plt.rcParams["font.family"] = ["Noto Sans CJK JP"] if ja else ["DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
 
-    info = json.load(open(os.path.join(args.dir, "run-info.json")))
+    info_path = os.path.join(args.dir, "run-info.json")
+    if not os.path.exists(info_path):
+        raise SystemExit(f"run-info.json not found in '{args.dir}' - --dir must point at a finished runs/<tag> directory")
+    info = json.load(open(info_path))
     series = [s.strip() for s in args.series.split(",") if s.strip()]
     for m in info.get("modes", []):
         if isinstance(m, dict) and m.get("name"):
             _MODE_DEV[m["name"]] = m.get("device", "")
     data = {}
     for s in series:
-        recs = [r for r in json.load(open(os.path.join(args.dir, f"results-{s}.json")))
-                if "effective_depth" in r]
+        p = os.path.join(args.dir, f"results-{s}.json")
+        if not os.path.exists(p):
+            raise SystemExit(f"results-{s}.json not found in '{args.dir}' - is '{s}' one of the measured series?")
+        recs = [r for r in json.load(open(p)) if "effective_depth" in r]
         if len(recs) < 2:
             raise SystemExit(f"not enough records for series {s}")
         for r in recs:

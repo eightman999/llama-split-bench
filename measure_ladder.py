@@ -18,6 +18,7 @@ import gzip
 import json
 import os
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -94,6 +95,8 @@ def main():
                     help="nvidia-smi GPU indices to guard against foreign compute, e.g. '0,1' (empty = no guard)")
     ap.add_argument("--ratio-init", type=float, default=4.3,
                     help="initial chars-per-token guess for filler sizing (adapts after stage 1)")
+    ap.add_argument("--server-pid", default="",
+                    help="pid of the llama-server started by the harness (the expected owner of the guarded GPUs)")
     args = ap.parse_args()
 
     guard_idx = set(args.guard_devices.split(",")) if args.guard_devices else set()
@@ -105,9 +108,20 @@ def main():
     status_path = os.path.join(args.out, f"status-{args.tag}.txt")
 
     records = []
+    aborted = False
+    expected_pid = int(args.server_pid) if str(args.server_pid).strip() else 0
     baseline = gpu_pids(guard_idx)
     if guard_idx:
-        print(f"guarding GPU indices {sorted(guard_idx)}; server pids: {sorted(baseline)}", flush=True)
+        foreign0 = baseline - ({expected_pid} if expected_pid else set())
+        print(f"guarding GPU indices {sorted(guard_idx)}; server pid {expected_pid or '?'}; "
+              f"other compute at start: {sorted(foreign0)}", flush=True)
+        if foreign0:
+            msg = f"ABORT: foreign GPU compute already running at ladder start: {sorted(foreign0)}"
+            print(msg, flush=True)
+            records.append({"aborted": msg})
+            with open(results_path, "w") as f:
+                json.dump(records, f, indent=2)
+            sys.exit(1)
     else:
         print("no guard devices given - foreign-process guard disabled", flush=True)
     ratio = args.ratio_init
@@ -120,6 +134,7 @@ def main():
             records.append({"aborted": msg})
             with open(results_path, "w") as f:
                 json.dump(records, f, indent=2)
+            aborted = True
             break
 
         if target == 0:
@@ -147,16 +162,27 @@ def main():
                 records.append({"aborted": f"stage {target}: {e2}"})
                 with open(results_path, "w") as f:
                     json.dump(records, f, indent=2)
+                aborted = True
                 break
         except Exception as e:
             print(f"stage {target}: request failed: {e}", flush=True)
             records.append({"aborted": f"stage {target}: {e}"})
             with open(results_path, "w") as f:
                 json.dump(records, f, indent=2)
+            aborted = True
             break
         after = gpu_state()
 
         t = res.get("timings", {})
+        if not isinstance(t.get("prompt_per_second"), (int, float)) or \
+           not isinstance(t.get("predicted_per_second"), (int, float)):
+            msg = f"stage {target}: response without usable timings (HTTP 200 but timings={t})"
+            print(msg, flush=True)
+            records.append({"aborted": msg})
+            with open(results_path, "w") as f:
+                json.dump(records, f, indent=2)
+            aborted = True
+            break
         ev = res.get("tokens_evaluated", 0)
         if target and ev > 0:
             ratio = (len(prompt) - len(TAIL)) / float(ev)
@@ -199,6 +225,9 @@ def main():
                                  "predicted_per_second", "draft_accept_rate", "wall_s")}) + "\n")
         print(json.dumps(rec, ensure_ascii=False), flush=True)
 
+    if aborted:
+        print("ABORTED", flush=True)
+        sys.exit(1)
     print("DONE", flush=True)
 
 

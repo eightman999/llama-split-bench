@@ -23,7 +23,7 @@
 ワークフロー全体が非対話・機械可読で、エージェントが無人で回せるようになっています:
 
 - **1コマンド+1設定ファイル** — 設定は `bench.conf`/`bench.local.conf` のみ。対話プロンプトもTUIもなし。
-- **デタッチ前提** — `setsid nohup bash run-bench.sh <tag> … &` で起動し、`runs/<tag>.log` の `BENCH-DONE` をポーリング。失敗時は `BENCH-ABORT: …` を出して非ゼロ終了するので、呼び出し側が推測する必要はありません。
+- **デタッチ前提** — 先に`mkdir -p runs`を一度実行し、`setsid nohup bash run-bench.sh <tag> … > runs/<tag>.log 2>&1 &`で起動してログをポーリング: `BENCH-DONE`(exit 0)=完了、`BENCH-ABORT: …`(exit 1)=計測失敗、`BENCH-FIGFAIL`(exit 1)=計測完了だが図の生成に失敗。SIGTERM/SIGINTはトラップされ、サーバとサンプラを掃除します(孤児を残しません)。
 - **機械可読の結果** — `run-info.json`(バイナリsha256、モード/デバイス、ctx、KV型、起動プレフィックス)と段ごとの `results-*.json`。図はJSONだけから再生成できます(`plot_bench.py --dir …`、再計測不要)。
 - **静的ゲート** — `check.sh`(bash -n、py_compile、任意でpyflakes)、タグ再利用の保護、計測対象GPUに他プロセスが乗ったら中断する外部プロセスガード。
 - **決定的な手順** — 段構成・生成長・補正方法が固定なので、実行同士を比較できます(「なんとなく」ではなく)。
@@ -51,11 +51,17 @@ python3 -m venv ~/.venvs/bench-plot
 cp bench.conf bench.local.conf
 $EDITOR bench.local.conf        # MODEL(必須), MMPROJ(任意), DEVICES, CTX … を設定
 
-./list-devices.sh               # llama.cppのデバイスとGPU構成を表示
+./list-devices.sh               # llama.cppのデバイスとGPU構成を表示(llama-serverがPATHに無い場合はパスを引数で渡す)
 
-# 本計測: layer + tensor(全DEVICES) + 単一GPUベースライン
+# runs/はgit管理外なので、クローン直後に一度だけ作成
+mkdir -p runs
+
+# 本計測: layer + tensor(全DEVICES) + 単一GPUベースライン(3モード262kで約1時間)
 setsid nohup bash run-bench.sh my-run-1 > runs/my-run-1.log 2>&1 &
-tail -f runs/my-run-1.log       # BENCH-DONE を待つ(3モード262kで約1時間)
+# 完了マーカーを待つ(tail -fは終了しないので使わない)。マーカー:
+#   BENCH-DONE=完了 | BENCH-ABORT: ...=失敗 | BENCH-FIGFAIL=図の生成に失敗
+until grep -qE "BENCH-(DONE|ABORT|FIGFAIL)" runs/my-run-1.log; do sleep 30; done
+tail -5 runs/my-run-1.log
 ```
 
 図は生JSONと同じ場所に出ます: `runs/my-run-1/split-bench-ja.png` / `split-bench-en.png`。
@@ -120,8 +126,10 @@ bash run-bench.sh p2 --mode-spec "myarm|CUDA0,CUDA1|tensor" # 名前と構成を
 - **モデルがQwenでない/MTP非対応の場合は?** `bench.conf`の`SPEC_ARGS`を空にすれば他は全てモデル非依存です。実プロンプト補正用のプロンプトは`measure_real.py --prompts-json`で差し替えできます(スクリプト参照)。
 - **同じタグで再実行すると?** 仕様として拒否します(前回の`results-*-pp0.json`/`results-real.json`が新しい図に混入するため)。新しいタグを使ってください(`--reuse`は意図的な追記専用)。
 - **単一GPUとの比較はいらない場合は?** 2通り: そのモードを実行しない(`--modes layer,tensor` — ④は自動非表示になり、単一GPU計測の時間も節約)、または`bench.conf`で`VS_PANEL=off`(単発の描き直しなら`--vs off`)。
-- **サーバの起動コマンドは変えられる?** argvは`bench.conf`から組み立てます(`BIN`, `LAUNCH_PREFIX`, `MODEL`, `MMPROJ`, `DEVICES`/`MODES`, `NGL`, `THREADS`, `FA`, `JINJA`, `KV_K/V`, `SPEC_ARGS`, `SPEC_DEVICE`, `TENSOR_SPLIT`, `LOAD_MODE`, `CACHE_ARGS`, `HOST`, `PORT`, `EXTRA_ARGS`)。任意フラグは`EXTRA_ARGS`で追記、`numactl`/`taskset`/`env`等の前置は`LAUNCH_PREFIX`、ラッパースクリプトを使うなら`BIN`に指定。実際のargv構成要素とバイナリのハッシュは毎回`run-info.json`に記録されます(他者と比較する際の証跡)。
+- **サーバの起動コマンドは変えられる?** argvは`bench.conf`から組み立てます(`BIN`, `LAUNCH_PREFIX`, `MODEL`, `MMPROJ`, `DEVICES`/`MODES`, `NGL`, `THREADS`, `FA`, `JINJA`, `KV_K/V`, `SPEC_ARGS`, `SPEC_DEVICE`, `TENSOR_SPLIT`, `LOAD_MODE`, `CACHE_ARGS`, `HOST`, `PORT`, `EXTRA_ARGS`)。任意フラグは`EXTRA_ARGS`で追記、`numactl`/`taskset`/`env`等の前置は`LAUNCH_PREFIX`、ラッパースクリプトを使うなら`BIN`に指定。正確なserver argvは腕ごとに`argv-<モード名>.txt`へ記録され(`run-info.json`の`modes[].argv_file`)、バイナリのハッシュと併せて他者との比較の証跡になります。
 - **1構成だけ計測したい(比較不要)場合は?** `--profile` で現在の `DEVICES` を1本の腕として計測し、prefill/decodeの2パネル図を生成します。`--mode-spec "名前|デバイス|split"`(複数指定可)で任意の腕を定義できます(例: `--mode-spec "gpu0|CUDA0|"` で単カード)。
+- **runs/や図を公開する場合は?** `run-info.json`と図のタイトルには`MACHINE`ラベル(既定=ホスト名+GPU名)が埋め込まれます — 公開予定の計測では`MACHINE`を中立的な文字列に設定してください。`real-response-*.txt`、`responses-*/`、`server-*.log`にはプロンプト/出力やバックエンド情報が入り得ます — センシティブなら投稿前に削除を。
+- **他人の設定やrunディレクトリを使う場合は?** `bench.conf`/`bench.local.conf`はbashでsourceされます(信頼できる設定のみ使用)。各実行の正確なserver argvは腕ごとに`argv-<モード名>.txt`へ記録され(`run-info.json`の`modes[].argv_file`)、バイナリのハッシュと併せて検証できます — 共有された結果を信じる前に確認を。
 
 ## ファイル構成
 

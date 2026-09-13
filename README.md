@@ -23,7 +23,7 @@ One config file, one command, no adjustments: for each mode it runs a context-de
 The whole workflow is non-interactive and machine-checkable, so an agent can run it unattended:
 
 - **One command, one config file** — everything lives in `bench.conf`/`bench.local.conf`; no prompts, no TUIs.
-- **Detached by design** — launch with `setsid nohup bash run-bench.sh <tag> … &` and poll `runs/<tag>.log` for the `BENCH-DONE` marker; failures print `BENCH-ABORT: …` and exit non-zero, so callers never have to guess.
+- **Detached by design** — `mkdir -p runs` once, launch with `setsid nohup bash run-bench.sh <tag> … > runs/<tag>.log 2>&1 &` and poll the log: `BENCH-DONE` (exit 0) = complete, `BENCH-ABORT: …` (exit 1) = measurement failed, `BENCH-FIGFAIL` (exit 1) = measurements complete but figure rendering failed. SIGTERM/SIGINT are trapped and clean up the server and sampler — no orphans.
 - **Machine-readable results** — `run-info.json` (binary sha256, modes/devices, ctx, KV type, launch prefix) plus per-stage `results-*.json`; figures are regenerated from JSON alone (`plot_bench.py --dir …`, no re-measurement).
 - **Static gates** — `check.sh` (bash -n, py_compile, optional pyflakes), run-dir reuse protection, and a foreign-process guard that aborts if someone else starts compute on the measured GPUs.
 - **Deterministic protocol** — fixed stages, fixed generation length, fixed corrections: runs compare like runs.
@@ -51,11 +51,17 @@ python3 -m venv ~/.venvs/bench-plot
 cp bench.conf bench.local.conf
 $EDITOR bench.local.conf        # set MODEL (required), MMPROJ (optional), DEVICES, CTX …
 
-./list-devices.sh               # show llama.cpp devices + GPU inventory
+./list-devices.sh               # show llama.cpp devices + GPU inventory (pass a path if llama-server is not on PATH)
 
-# full run: layer + tensor on all DEVICES, single-GPU baseline
+# runs/ is git-ignored, so create it once on a fresh clone
+mkdir -p runs
+
+# full run: layer + tensor on all DEVICES, single-GPU baseline (~1 h for a 3-mode 262k run)
 setsid nohup bash run-bench.sh my-run-1 > runs/my-run-1.log 2>&1 &
-tail -f runs/my-run-1.log       # wait for BENCH-DONE (~1 h for a 3-mode 262k run)
+# wait for a completion marker; do NOT use tail -f (it never exits). Markers:
+#   BENCH-DONE = complete | BENCH-ABORT: ... = failed | BENCH-FIGFAIL = figures failed
+until grep -qE "BENCH-(DONE|ABORT|FIGFAIL)" runs/my-run-1.log; do sleep 30; done
+tail -5 runs/my-run-1.log
 ```
 
 Figures land next to the raw JSON: `runs/my-run-1/split-bench-ja.png` and `split-bench-en.png`.
@@ -120,8 +126,10 @@ Re-render without re-measuring:
 - **My model isn't Qwen / doesn't support MTP.** Leave `SPEC_ARGS` empty in `bench.conf`; everything else is model-agnostic. The real-prompt factor prompt set can be replaced with `measure_real.py --prompts-json` (see the script).
 - **Re-running with the same tag?** Refused by design: stale `results-*-pp0.json` / `results-real.json` from the older run would silently mix into the new figures. Use a new tag (`--reuse` overrides, only for deliberate appends).
 - **Can I skip the single-GPU comparison?** Yes, two ways: don't run that mode (`--modes layer,tensor` — panel ④ auto-hides and you save the single-GPU run time), or keep the run and set `VS_PANEL=off` in `bench.conf` (for a one-off re-render: `--vs off`).
-- **Can I change how the server is launched?** The argv is assembled from `bench.conf` (`BIN`, `LAUNCH_PREFIX`, `MODEL`, `MMPROJ`, `DEVICES`/`MODES`, `NGL`, `THREADS`, `FA`, `JINJA`, `KV_K/V`, `SPEC_ARGS`, `SPEC_DEVICE`, `TENSOR_SPLIT`, `LOAD_MODE`, `CACHE_ARGS`, `HOST`, `PORT`, `EXTRA_ARGS`). Append arbitrary flags with `EXTRA_ARGS`, prefix wrappers (`numactl`, `taskset`, `env …`) with `LAUNCH_PREFIX`, or point `BIN` at a wrapper script. The exact argv inputs and binary hash are recorded in `run-info.json` for every run — that is the evidence other people compare against.
+- **Can I change how the server is launched?** The argv is assembled from `bench.conf` (`BIN`, `LAUNCH_PREFIX`, `MODEL`, `MMPROJ`, `DEVICES`/`MODES`, `NGL`, `THREADS`, `FA`, `JINJA`, `KV_K/V`, `SPEC_ARGS`, `SPEC_DEVICE`, `TENSOR_SPLIT`, `LOAD_MODE`, `CACHE_ARGS`, `HOST`, `PORT`, `EXTRA_ARGS`). Append arbitrary flags with `EXTRA_ARGS`, prefix wrappers (`numactl`, `taskset`, `env …`) with `LAUNCH_PREFIX`, or point `BIN` at a wrapper script. The exact server argv is recorded per arm (`argv-<mode>.txt`; `modes[].argv_file` in `run-info.json`) together with the binary hash — that is the evidence other people compare against.
 - **Can I measure one configuration only (no comparison)?** Yes: `--profile` measures the current `DEVICES` as a single arm and renders the 2-panel prefill/decode figure; `--mode-spec "name|device|split"` (repeatable) defines arbitrary arms, e.g. `--mode-spec "gpu0|CUDA0|"` for a single-card profile.
+- **Sharing runs/ or figures?** `run-info.json` and the figure titles embed the `MACHINE` label (default: hostname + GPU names) — set `MACHINE` to a neutral string before a run you intend to publish. `real-response-*.txt`, `responses-*/` and `server-*.log` can contain your prompts/outputs and backend logs — scrub them if they are sensitive.
+- **Using someone else's config or run dir?** `bench.conf`/`bench.local.conf` are sourced by bash (run only configs you trust), and every run records its exact server argv per arm in `argv-<mode>.txt` (referenced from `run-info.json`) next to the binary hash — check those before trusting a shared result.
 
 ## Files
 

@@ -2,7 +2,7 @@
 """Real-prompt decode sanity runs on the standardized test server (port from config).
 
 Default prompts = the built-in workload proxies (3 real-world-style tasks). Override with
---prompts-json '{"name": ..., "prompt": ...}' to measure with YOUR workload instead.
+--prompts-json PATH (a JSON file: [{"name": ..., "prompt": ...}, ...]) to measure with YOUR workload.
 temperature 0.7 / top_p 0.9, n_predict 1200, fresh context per prompt. The plotter
 derives the real-operation correction factor from results-real.json:
   factor = mean(real decode / synthetic decode at depth 0 of the reference series).
