@@ -91,6 +91,7 @@ bash run-bench.sh t1 --modes tensor
 - **モデルがQwenでない/MTP非対応の場合は?** `bench.conf`の`SPEC_ARGS`を空にすれば他は全てモデル非依存です。実プロンプト補正用のプロンプトは`measure_real.py --prompts-json`で差し替えできます(スクリプト参照)。
 - **同じタグで再実行すると?** 仕様として拒否します(前回の`results-*-pp0.json`/`results-real.json`が新しい図に混入するため)。新しいタグを使ってください(`--reuse`は意図的な追記専用)。
 - **単一GPUとの比較はいらない場合は?** 2通り: そのモードを実行しない(`--modes layer,tensor` — ④は自動非表示になり、単一GPU計測の時間も節約)、または`bench.conf`で`VS_PANEL=off`(単発の描き直しなら`--vs off`)。
+- **サーバの起動コマンドは変えられる?** argvは`bench.conf`から組み立てます(`BIN`, `LAUNCH_PREFIX`, `MODEL`, `MMPROJ`, `DEVICES`/`MODES`, `NGL`, `THREADS`, `FA`, `JINJA`, `KV_K/V`, `SPEC_ARGS`, `SPEC_DEVICE`, `LOAD_MODE`, `CACHE_ARGS`, `HOST`, `PORT`, `EXTRA_ARGS`)。任意フラグは`EXTRA_ARGS`で追記、`numactl`/`taskset`/`env`等の前置は`LAUNCH_PREFIX`、ラッパースクリプトを使うなら`BIN`に指定。実際のargv構成要素とバイナリのハッシュは毎回`run-info.json`に記録されます(他者と比較する際の証跡)。
 
 ## ファイル構成
 

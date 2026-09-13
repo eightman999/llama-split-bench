@@ -91,6 +91,7 @@ Re-render without re-measuring:
 - **My model isn't Qwen / doesn't support MTP.** Leave `SPEC_ARGS` empty in `bench.conf`; everything else is model-agnostic. The real-prompt factor prompt set can be replaced with `measure_real.py --prompts-json` (see the script).
 - **Re-running with the same tag?** Refused by design: stale `results-*-pp0.json` / `results-real.json` from the older run would silently mix into the new figures. Use a new tag (`--reuse` overrides, only for deliberate appends).
 - **Can I skip the single-GPU comparison?** Yes, two ways: don't run that mode (`--modes layer,tensor` — panel ④ auto-hides and you save the single-GPU run time), or keep the run and set `VS_PANEL=off` in `bench.conf` (for a one-off re-render: `--vs off`).
+- **Can I change how the server is launched?** The argv is assembled from `bench.conf` (`BIN`, `LAUNCH_PREFIX`, `MODEL`, `MMPROJ`, `DEVICES`/`MODES`, `NGL`, `THREADS`, `FA`, `JINJA`, `KV_K/V`, `SPEC_ARGS`, `SPEC_DEVICE`, `LOAD_MODE`, `CACHE_ARGS`, `HOST`, `PORT`, `EXTRA_ARGS`). Append arbitrary flags with `EXTRA_ARGS`, prefix wrappers (`numactl`, `taskset`, `env …`) with `LAUNCH_PREFIX`, or point `BIN` at a wrapper script. The exact argv inputs and binary hash are recorded in `run-info.json` for every run — that is the evidence other people compare against.
 
 ## Files
 
