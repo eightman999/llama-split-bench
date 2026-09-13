@@ -60,7 +60,8 @@ if [ -e "$TAGDIR" ] && [ -n "$(ls -A "$TAGDIR" 2>/dev/null)" ] && [ "$REUSE" != 
   exit 1
 fi
 mkdir -p "$TAGDIR"
-URL="http://127.0.0.1:$PORT_R"
+URLHOST="$HOST"; [ "$URLHOST" = "0.0.0.0" ] && URLHOST="127.0.0.1"
+URL="http://$URLHOST:$PORT_R"
 
 # which mode runs the real-prompt correction prompts
 REAL_TARGET="$REAL_MODE"
@@ -159,8 +160,12 @@ for m in "${SEL[@]}"; do
   fi
 
   kill "$SRV" 2>/dev/null; sleep 3; kill -9 "$SRV" 2>/dev/null
-  ORPHAN=$(pgrep -f "$(basename "$BIN_R").*--port $PORT_R" | head -1)
-  [ -n "$ORPHAN" ] && { kill "$ORPHAN" 2>/dev/null; sleep 2; }
+  # belt-and-braces: if something still answers on the benchmark port, reap the listener
+  # (name-independent - finds whatever holds $PORT_R instead of pattern-matching the binary)
+  if curl -s -m 2 "$URL/health" 2>/dev/null | grep -q '"status":"ok"'; then
+    OPID=$(ss -ltnp 2>/dev/null | grep ":$PORT_R " | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
+    [ -n "$OPID" ] && { echo "reaping leftover server on port $PORT_R (pid $OPID)"; kill "$OPID" 2>/dev/null; sleep 2; }
+  fi
   touch "$STOP"; wait $SAMPLER 2>/dev/null
 done
 

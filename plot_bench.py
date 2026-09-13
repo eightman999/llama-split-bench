@@ -131,7 +131,7 @@ def main():
         if os.path.exists(p):
             d = json.load(open(p))
             sizes = sorted(int(k[2:]) for k in d if k.startswith("pp") and k[2:].isdigit())
-            key = "pp2048" if 2048 in sizes else (f"pp{sizes[len(sizes) // 2]}" if sizes else None)
+            key = f"pp{min(sizes, key=lambda s: (abs(s - 2048), s))}" if sizes else None
             val = d[key].get("prompt_per_second") if key else None
             if isinstance(val, (int, float)):
                 pp0[s] = val
