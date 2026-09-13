@@ -12,6 +12,7 @@ Usage: measure_real.py [--url http://127.0.0.1:18081] [--out results-real.json]
 import argparse
 import hashlib
 import json
+import os
 import time
 import urllib.request
 

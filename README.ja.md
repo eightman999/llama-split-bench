@@ -19,7 +19,7 @@
 
 ## クイックスタート
 
-必要環境: Linux、そのllama.cppビルドが対応するGPU(1枚以上)、`python3`(計測は標準ライブラリのみ、作図に`matplotlib`)、`runs/`用の空き容量(1回数MB+任意の応答ダンプ)。
+必要環境: Linux、そのllama.cppビルドが対応するGPU(1枚以上)、`python3`(計測は標準ライブラリのみ、作図に`matplotlib`)、`runs/`用の空き容量(1回数MB+任意の応答ダンプ)。GPUサンプラと外部プロセスガードは`nvidia-smi`と`CUDA<n>`形式のデバイス名を使います(他のバックエンドでは自動的に縮退: ガード無効・ファン記録オフ)。
 
 ```bash
 git clone https://github.com/kuraneko1/llama-split-bench
@@ -79,6 +79,7 @@ bash run-bench.sh t1 --modes tensor
 - **サーバが出す `NCCL not compiled` / `backend sampling ... CPU` 警告は?** 本ベンチには無害です。
 - **なぜ各段1000トークン生成?** 定常decodeはMTP採択のばらつきを均すのに数百トークン必要なため。100では心もとなく、1000で図に載る精度になります。
 - **モデルがQwenでない/MTP非対応の場合は?** `bench.conf`の`SPEC_ARGS`を空にすれば他は全てモデル非依存です。実プロンプト補正用のプロンプトは`measure_real.py --prompts-json`で差し替えできます(スクリプト参照)。
+- **同じタグで再実行すると?** 仕様として拒否します(前回の`results-*-pp0.json`/`results-real.json`が新しい図に混入するため)。新しいタグを使ってください(`--reuse`は意図的な追記専用)。
 
 ## ファイル構成
 
@@ -91,6 +92,7 @@ bash run-bench.sh t1 --modes tensor
 | `measure_real.py` | 実プロンプト補正計測 |
 | `plot_bench.py` | 作図 — 流儀はコードに凍結(パネル構成、端点数字、トグル) |
 | `list-devices.sh` | デバイス構成の確認用ヘルパ |
+| `check.sh` | 静的チェック(bash -n、py_compile、任意でpyflakes)—コミット前に実行 |
 | `runs/<tag>/` | 実行ごとの結果: 生JSON、サーバログ、サンプラログ、図 |
 
 ## ライセンス

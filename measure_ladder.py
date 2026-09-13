@@ -11,6 +11,7 @@ Protocol matches the published 2x V100 measurements (see README); everything is 
 
 Usage: measure_ladder.py --tag <mode> [--stages 0,32000,...] [--n-predict 1000]
                          [--url http://127.0.0.1:18081] [--out DIR] [--guard-devices 0,1]
+                         [--ratio-init 4.3]
 """
 import argparse
 import gzip
@@ -91,6 +92,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--guard-devices", default="",
                     help="nvidia-smi GPU indices to guard against foreign compute, e.g. '0,1' (empty = no guard)")
+    ap.add_argument("--ratio-init", type=float, default=4.3,
+                    help="initial chars-per-token guess for filler sizing (adapts after stage 1)")
     args = ap.parse_args()
 
     guard_idx = set(args.guard_devices.split(",")) if args.guard_devices else set()
@@ -107,7 +110,7 @@ def main():
         print(f"guarding GPU indices {sorted(guard_idx)}; server pids: {sorted(baseline)}", flush=True)
     else:
         print("no guard devices given - foreign-process guard disabled", flush=True)
-    ratio = 4.3
+    ratio = args.ratio_init
 
     for k, target in enumerate(stages):
         foreign = gpu_pids(guard_idx) - baseline

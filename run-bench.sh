@@ -2,7 +2,7 @@
 # llama-split-bench: measure layer vs tensor (vs single-GPU) for llama.cpp on any multi-GPU box.
 # Usage: run-bench.sh <tag> [--modes a,b] [--devices CUDA0,CUDA1] [--ctx N] [--stages S]
 #                      [--n-predict N] [--pp0-sizes S] [--bin PATH] [--model PATH]
-#                      [--port N] [--no-real]
+#                      [--port N] [--no-real] [--reuse]
 # Launch detached:  setsid nohup bash run-bench.sh <tag> > runs/<tag>.log 2>&1 &
 # Everything tunable lives in bench.conf / bench.local.conf - no other edits are needed.
 set -u
@@ -12,7 +12,7 @@ source "$HERE/bench.conf"
 RUNS_DIR="${RUNS_DIR:-$HERE/runs}"
 
 TAG=""; MODES_R=""; CTX_R="$CTX"; STAGES_R="$STAGES"; NP_R="$N_PREDICT"; PP0_R="$PP0_SIZES"
-DEVICES_R=""; BIN_R="$BIN"; MODEL_R="$MODEL"; PORT_R="$PORT"; DO_REAL=1
+DEVICES_R=""; BIN_R="$BIN"; MODEL_R="$MODEL"; PORT_R="$PORT"; DO_REAL=1; REUSE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --modes) MODES_R="$2"; shift 2;;
@@ -25,19 +25,23 @@ while [ $# -gt 0 ]; do
     --model) MODEL_R="$2"; shift 2;;
     --port) PORT_R="$2"; shift 2;;
     --no-real) DO_REAL=0; shift;;
+    --reuse) REUSE=1; shift;;
     -*) echo "unknown option: $1"; exit 1;;
     *) TAG="$1"; shift;;
   esac
 done
-[ -z "$TAG" ] && { echo "usage: run-bench.sh <tag> [--modes a,b] [--devices ...] [--ctx N] [--stages S] [--n-predict N] [--no-real]"; exit 1; }
+[ -z "$TAG" ] && { echo "usage: run-bench.sh <tag> [--modes a,b] [--devices ...] [--ctx N] [--stages S] [--n-predict N] [--no-real] [--reuse]"; exit 1; }
+case "$TAG" in */*|.*) echo "ERROR: tag '$TAG' must not contain '/' or start with '.'"; exit 1;; esac
 [ -z "$MODEL_R" ] && { echo "ERROR: MODEL is not set - put it in bench.conf or bench.local.conf (see README)"; exit 1; }
 command -v "$BIN_R" >/dev/null 2>&1 || [ -x "$BIN_R" ] || { echo "ERROR: binary '$BIN_R' not found"; exit 1; }
 
-# --devices rebuilds the standard mode set (layer/tensor on all, single on the first)
+# --devices always rebuilds the standard mode set (layer/tensor on all, single on the first),
+# overriding a MODES array defined in bench.conf/bench.local.conf
 if [ -n "$DEVICES_R" ]; then
   DEVICES="$DEVICES_R"
-fi
-if ! declare -p MODES >/dev/null 2>&1; then
+  SD="$SINGLE_DEV"; [ "$SD" = auto ] && SD="${DEVICES%%,*}"
+  MODES=("layer|$DEVICES|layer" "tensor|$DEVICES|tensor" "single|$SD|")
+elif ! declare -p MODES >/dev/null 2>&1; then
   SD="$SINGLE_DEV"; [ "$SD" = auto ] && SD="${DEVICES%%,*}"
   MODES=("layer|$DEVICES|layer" "tensor|$DEVICES|tensor" "single|$SD|")
 fi
@@ -49,7 +53,13 @@ for m in "${MODES[@]}"; do
 done
 [ ${#SEL[@]} -eq 0 ] && { echo "no modes selected - check the MODES array in bench.conf / --modes"; exit 1; }
 
-TAGDIR="$RUNS_DIR/$TAG"; mkdir -p "$TAGDIR"
+TAGDIR="$RUNS_DIR/$TAG"
+if [ -e "$TAGDIR" ] && [ -n "$(ls -A "$TAGDIR" 2>/dev/null)" ] && [ "$REUSE" != 1 ]; then
+  echo "ERROR: $TAGDIR is not empty - use a new tag (or --reuse to deliberately append; stale"
+  echo "       results-*-pp0.json / results-real.json from an older run would mix into the new figures)"
+  exit 1
+fi
+mkdir -p "$TAGDIR"
 URL="http://127.0.0.1:$PORT_R"
 
 # which mode runs the real-prompt correction prompts
@@ -73,6 +83,19 @@ fi
 
 guard_of() { echo "$1" | tr ',' '\n' | sed -n 's/^CUDA\([0-9][0-9]*\)$/\1/p' | paste -sd, -; }
 
+# run one measurement step; abort the whole run on a non-zero exit (silent failures
+# would otherwise leave partial results that the plotter cannot use)
+run_measure() {
+  local label="$1"; shift
+  "$@"; local rc=$?
+  if [ "$rc" != 0 ]; then
+    echo "BENCH-ABORT: $label failed (rc=$rc)"
+    kill "$SRV" 2>/dev/null; pkill -P "$SRV" 2>/dev/null
+    touch "$STOP" 2>/dev/null; wait $SAMPLER 2>/dev/null
+    exit 1
+  fi
+}
+
 REAL_DONE=0
 echo "BENCH-START $TAG $(date +%H:%M:%S)  ctx=$CTX_R stages=$STAGES_R np=$NP_R"
 for m in "${SEL[@]}"; do
@@ -86,9 +109,10 @@ for m in "${SEL[@]}"; do
     done > "$TAGDIR/sampler-$name.log" 2>&1 ) &
   SAMPLER=$!
 
-  ARGS=("$BIN_R" -m "$MODEL_R" --host 127.0.0.1 --port "$PORT_R" --device "$dev")
+  ARGS=("$BIN_R" -m "$MODEL_R" --host "$HOST" --port "$PORT_R" --device "$dev")
   [ -n "$split" ] && ARGS+=(--split-mode "$split")
-  ARGS+=(-ngl "$NGL" -fa on --jinja -c "$CTX_R" --parallel 1 -t "$THREADS")
+  ARGS+=(-ngl "$NGL" -fa "$FA" -c "$CTX_R" --parallel 1 -t "$THREADS")
+  [ "$JINJA" = 1 ] && ARGS+=(--jinja)
   [ -n "$KV_K" ] && ARGS+=(--cache-type-k "$KV_K")
   [ -n "$KV_V" ] && ARGS+=(--cache-type-v "$KV_V")
   if [ -n "$SPEC_ARGS" ]; then
@@ -119,21 +143,23 @@ for m in "${SEL[@]}"; do
     exit 1
   fi
 
-  python3 "$HERE/measure_ladder.py" --tag "$name" --stages "$STAGES_R" --n-predict "$NP_R" \
-    --url "$URL" --out "$TAGDIR" --guard-devices "$(guard_of "$dev")"
+  run_measure "$name ladder" python3 "$HERE/measure_ladder.py" --tag "$name" --stages "$STAGES_R" \
+    --n-predict "$NP_R" --url "$URL" --out "$TAGDIR" --guard-devices "$(guard_of "$dev")" \
+    --ratio-init "$RATIO_INIT"
   if grep -q '"aborted"' "$TAGDIR/results-$name.json" 2>/dev/null; then
     echo "BENCH-ABORT: $name ladder aborted"
     kill "$SRV" 2>/dev/null; pkill -P "$SRV" 2>/dev/null; touch "$STOP"; wait $SAMPLER 2>/dev/null
     exit 1
   fi
-  python3 "$HERE/measure_pp0.py" --tag "$name" --sizes "$PP0_R" --url "$URL" --out "$TAGDIR/results-$name-pp0.json"
+  run_measure "$name pp0" python3 "$HERE/measure_pp0.py" --tag "$name" --sizes "$PP0_R" --url "$URL" \
+    --out "$TAGDIR/results-$name-pp0.json" --chars-per-token "$RATIO_INIT"
   if [ "$DO_REAL" = 1 ] && [ "$REAL_DONE" = 0 ] && [ "$name" = "$REAL_TARGET" ]; then
-    python3 "$HERE/measure_real.py" --url "$URL" --out "$TAGDIR/results-real.json"
+    run_measure "real prompts" python3 "$HERE/measure_real.py" --url "$URL" --out "$TAGDIR/results-real.json"
     REAL_DONE=1
   fi
 
   kill "$SRV" 2>/dev/null; sleep 3; kill -9 "$SRV" 2>/dev/null
-  ORPHAN=$(pgrep -f "llama-serve[r].*--port $PORT_R" | head -1)
+  ORPHAN=$(pgrep -f "$(basename "$BIN_R").*--port $PORT_R" | head -1)
   [ -n "$ORPHAN" ] && { kill "$ORPHAN" 2>/dev/null; sleep 2; }
   touch "$STOP"; wait $SAMPLER 2>/dev/null
 done
@@ -141,7 +167,7 @@ done
 # config snapshot for the plotter
 MODESPEC=$(printf '%s;' "${SEL[@]}")
 python3 - "$TAGDIR" "$TAG" "$CTX_R" "$STAGES_R" "$NP_R" "$MODESPEC" "$MACHINE" "$BIN_R" "$KV_K" "$KV_V" <<'PYEOF'
-import json, os, socket, subprocess, sys, datetime
+import hashlib, json, os, shutil, socket, subprocess, sys, datetime
 from collections import Counter
 
 d, tag, ctx, stages, npred, modespec, machine, binp, kvk, kvv = sys.argv[1:11]
@@ -156,8 +182,14 @@ for m in modespec.split(";"):
     parts = (m.split("|") + ["", ""])[:3]
     modes.append({"name": parts[0], "device": parts[1], "split": parts[2]})
 
-path = binp if os.path.exists(binp) else sh(f"command -v {binp}")
-sha = sh(f"sha256sum '{path}'").split()[0] if path else ""
+path = binp if os.path.exists(binp) else shutil.which(binp)
+sha = ""
+if path:
+    try:
+        with open(path, "rb") as f:
+            sha = hashlib.sha256(f.read()).hexdigest()
+    except OSError as e:
+        print(f"warning: cannot hash {path}: {e}", file=sys.stderr)
 _v = subprocess.run([binp, "--version"], capture_output=True, text=True)
 ver = (_v.stdout + " " + _v.stderr).replace("\n", " ").strip()   # some builds print --version to stderr
 
@@ -181,7 +213,8 @@ PYEOF
 # figures (ja + en)
 SERIES_NAMES=$(printf '%s\n' "${SEL[@]}" | cut -d'|' -f1 | paste -sd,)
 for LANG in ja en; do
-  "$VENV_PY" "$HERE/plot_bench.py" --dir "$TAGDIR" --series "$SERIES_NAMES" --lang "$LANG" --out split-bench \
+  "$VENV_PY" "$HERE/plot_bench.py" --dir "$TAGDIR" --series "$SERIES_NAMES" --lang "$LANG" \
+    --baseline "$BASELINE" --out split-bench \
     || echo "plot($LANG) failed - check VENV_PY/matplotlib (see README)"
 done
 echo "BENCH-DONE $TAG $(date +%H:%M:%S)"

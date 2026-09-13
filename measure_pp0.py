@@ -6,7 +6,7 @@ the server-reported prefill rate at effectively empty context. This replaces the
 tiny-prompt artifact of the ladder harness's stage 0 in the figures; the plotter
 uses the 2048-token value by default.
 
-Usage: measure_pp0.py --tag <mode> --sizes 512,2048,8192 [--url ...] [--out FILE]
+Usage: measure_pp0.py --tag <mode> --sizes 512,2048,8192 [--url ...] [--out FILE] [--chars-per-token 4.3]
 """
 import argparse
 import json
@@ -42,6 +42,8 @@ def main():
     ap.add_argument("--sizes", default="512,2048,8192")
     ap.add_argument("--url", default="http://127.0.0.1:18081")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--chars-per-token", type=float, default=4.3,
+                    help="initial chars-per-token guess for filler sizing (tokenizer dependent)")
     args = ap.parse_args()
 
     out = {"tag": args.tag}
@@ -50,7 +52,7 @@ def main():
          {"prompt": "warmup", "n_predict": 8, "cache_prompt": False, "temperature": 0.0})
 
     for size in [int(x) for x in args.sizes.split(",")]:
-        prompt = fill_text(int(size * 4.3)) + TAIL
+        prompt = fill_text(int(size * args.chars_per_token)) + TAIL
         wall, res = post(args.url, "/completion",
                          {"prompt": prompt, "n_predict": 64, "cache_prompt": False,
                           "temperature": 0.0, "ignore_eos": True})
@@ -64,8 +66,10 @@ def main():
             "predicted_per_second": t.get("predicted_per_second"),
             "wall_s": round(wall, 2),
         }
+        pps = t.get("prompt_per_second")
+        pps_s = f"{pps:.1f}" if isinstance(pps, (int, float)) else "n/a"
         print(f"{args.tag} pp{size}: prompt_n={t.get('prompt_n')} cache_n={t.get('cache_n')} "
-              f"prefill={t.get('prompt_per_second'):.1f} t/s", flush=True)
+              f"prefill={pps_s} t/s", flush=True)
 
     with open(args.out, "w") as f:
         json.dump(out, f, indent=2)

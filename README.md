@@ -19,7 +19,7 @@ One config file, one command, no adjustments: for each mode it runs a context-de
 
 ## Quickstart
 
-Requirements: Linux, one or more GPUs supported by your llama.cpp build, `python3` (stdlib for measurement; `matplotlib` for figures), and enough disk for `runs/` (a few MB per run plus optional response dumps).
+Requirements: Linux, one or more GPUs supported by your llama.cpp build, `python3` (stdlib for measurement; `matplotlib` for figures), and enough disk for `runs/` (a few MB per run plus optional response dumps). The GPU sampler and the foreign-process guard use `nvidia-smi` and `CUDA<n>` device names; on other backends they degrade gracefully (guard disabled, fan logging off).
 
 ```bash
 git clone https://github.com/kuraneko1/llama-split-bench
@@ -79,6 +79,7 @@ Endpoint numbers sit inside the right edge of each panel — bold = measured, li
 - **`NCCL not compiled` / `backend sampling ... CPU` server warnings?** Harmless for this benchmark.
 - **Why 1000 generated tokens per stage?** Steady-state decode needs a few hundred tokens to average out MTP acceptance variance; 100 fits pipelines but 1000 fits figures.
 - **My model isn't Qwen / doesn't support MTP.** Leave `SPEC_ARGS` empty in `bench.conf`; everything else is model-agnostic. The real-prompt factor prompt set can be replaced with `measure_real.py --prompts-json` (see the script).
+- **Re-running with the same tag?** Refused by design: stale `results-*-pp0.json` / `results-real.json` from the older run would silently mix into the new figures. Use a new tag (`--reuse` overrides, only for deliberate appends).
 
 ## Files
 
@@ -91,6 +92,7 @@ Endpoint numbers sit inside the right edge of each panel — bold = measured, li
 | `measure_real.py` | real-prompt correction runs |
 | `plot_bench.py` | figure rendering — conventions frozen in code (panels, endpoint numbers, toggles) |
 | `list-devices.sh` | device inventory helper |
+| `check.sh` | static checks (bash -n, py_compile, optional pyflakes) — run before committing |
 | `runs/<tag>/` | per-run results: raw JSON, server logs, sampler logs, figures |
 
 ## License

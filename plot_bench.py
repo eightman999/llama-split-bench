@@ -30,7 +30,15 @@ DISPLAY = {
     "tp2p":   {"ja": "tensor + GGML_CUDA_P2P=1", "en": "tensor + GGML_CUDA_P2P=1"},
 }
 COL = {"layer": "#1f77b4", "tensor": "#d62728", "single": "#7f7f7f", "tp2p": "#2ca02c"}
+_FALLBACK_PALETTE = ["#8c564b", "#9467bd", "#e377c2", "#17becf", "#bcbd22"]
 _MODE_DEV = {}   # mode name -> device, filled from run-info.json
+
+
+def col(tag):
+    """Series color; unknown (custom) mode names get a stable fallback color."""
+    if tag not in COL:
+        COL[tag] = _FALLBACK_PALETTE[len(COL) % len(_FALLBACK_PALETTE)]
+    return COL[tag]
 
 
 def disp(tag, lang):
@@ -103,7 +111,14 @@ def main():
                 if "effective_depth" in r]
         if len(recs) < 2:
             raise SystemExit(f"not enough records for series {s}")
+        for r in recs:
+            for key in ("prompt_per_second", "predicted_per_second"):
+                if not isinstance(r.get(key), (int, float)):
+                    raise SystemExit(f"series {s} stage {r.get('stage')}: missing {key} - incomplete run dir?")
         data[s] = recs
+    lens = {s: len(data[s]) for s in series}
+    if len(set(lens.values())) != 1:
+        raise SystemExit(f"series have different stage counts: {lens} - re-plot a consistent set")
 
     stages = [int(x) for x in str(info.get("stages", "")).split(",")]
     if len(stages) != len(data[series[0]]):
@@ -115,8 +130,13 @@ def main():
         p = os.path.join(args.dir, f"results-{s}-pp0.json")
         if os.path.exists(p):
             d = json.load(open(p))
-            key = "pp2048" if "pp2048" in d else sorted(k for k in d if k.startswith("pp"))[0]
-            pp0[s] = d[key]["prompt_per_second"]
+            sizes = sorted(int(k[2:]) for k in d if k.startswith("pp") and k[2:].isdigit())
+            key = "pp2048" if 2048 in sizes else (f"pp{sizes[len(sizes) // 2]}" if sizes else None)
+            val = d[key].get("prompt_per_second") if key else None
+            if isinstance(val, (int, float)):
+                pp0[s] = val
+            else:
+                print(f"note: no usable pp0 value for {s}; depth-0 prefill falls back to the ladder value")
 
     factor = None
     if args.estimate == "on" and os.path.exists(os.path.join(args.dir, "results-real.json")):
@@ -156,26 +176,25 @@ def main():
         ys = [r["prompt_per_second"] for r in data[s]]
         xs = list(range(len(ys)))
         if s in pp0:
-            xs = [0] + xs[1:]
             ys = [pp0[s]] + ys[1:]
         ls, lw = style_of(s)
-        ax1.plot(xs, ys, color=COL[s], ls=ls, lw=lw, marker="o", ms=4, label=disp(s, args.lang))
+        ax1.plot(xs, ys, color=col(s), ls=ls, lw=lw, marker="o", ms=4, label=disp(s, args.lang))
     ax1.set_title(("① prefill (増分プロンプト評価速度) — 横軸: 深度ラダー(等間隔)" if ja else
                    "(1) prefill (incremental prompt-eval rate) - x: depth ladder (evenly spaced)"),
                   fontsize=11, loc="left")
     ax1.set_ylabel("tokens/s")
-    draw_endpoints(ax1, endpoints_dedupe([(data[s][-1]["prompt_per_second"], COL[s], "measured") for s in series]))
+    draw_endpoints(ax1, endpoints_dedupe([(data[s][-1]["prompt_per_second"], col(s), "measured") for s in series]))
 
     # ---- (2) decode ----
     for s in series:
         ys = [r["predicted_per_second"] for r in data[s]]
         ls, lw = style_of(s)
-        ax2.plot(range(len(ys)), ys, color=COL[s], ls=ls, lw=lw, marker="o", ms=4, label=disp(s, args.lang))
+        ax2.plot(range(len(ys)), ys, color=col(s), ls=ls, lw=lw, marker="o", ms=4, label=disp(s, args.lang))
     rows = []
     if est:
         for s in series:
             ys = [r["predicted_per_second"] * factor for r in data[s]]
-            ax2.plot(range(len(ys)), ys, color=COL[s],
+            ax2.plot(range(len(ys)), ys, color=col(s),
                      ls=(0, (6, 3)) if s == "single" else (0, (3, 2.2)),
                      lw=1.3 if s == "single" else 0.9)
         ax2.text(0.015, 0.02,
@@ -184,9 +203,9 @@ def main():
                  transform=ax2.transAxes, fontsize=8, color="#555555")
     for s in series:
         v = data[s][-1]["predicted_per_second"]
-        rows.append((v, COL[s], "measured"))
+        rows.append((v, col(s), "measured"))
         if est:
-            rows.append((v * factor, COL[s], "estimate"))
+            rows.append((v * factor, col(s), "estimate"))
     ax2.set_title(("② decode (平均生成速度)" if ja else
                    f"(2) decode (average generation rate, {info.get('n_predict', 1000)} tokens)"),
                   fontsize=11, loc="left")
@@ -246,7 +265,7 @@ def main():
         xpos = range(len(dep))
         for idx, (s, metric, vv) in enumerate(vals):
             off = (idx - (k - 1) / 2) * bw
-            color = COL[s] if metric == "pf" else lighten(COL[s])
+            color = col(s) if metric == "pf" else lighten(col(s))
             label = (f"{disp(s, args.lang)} {'prefill' if metric == 'pf' else 'decode'}")
             ax4.bar([x + off for x in xpos], vv, bw, color=color, label=label)
         ax4.axhline(0, color="#666666", lw=0.8)
