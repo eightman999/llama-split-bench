@@ -3,6 +3,9 @@
 # Usage: run-bench.sh <tag> [--modes a,b] [--devices CUDA0,CUDA1] [--ctx N] [--stages S]
 #                      [--n-predict N] [--pp0-sizes S] [--bin PATH] [--model PATH]
 #                      [--port N] [--no-real] [--reuse]
+#                      [--profile] [--mode-spec "name|device|split"]   (repeatable)
+#   --profile     measure the current DEVICES as one arm (prefill/decode figures only,
+#                 no layer/tensor comparison). --mode-spec defines arbitrary arms.
 # Launch detached:  setsid nohup bash run-bench.sh <tag> > runs/<tag>.log 2>&1 &
 # Everything tunable lives in bench.conf / bench.local.conf - no other edits are needed.
 set -u
@@ -13,6 +16,7 @@ RUNS_DIR="${RUNS_DIR:-$HERE/runs}"
 
 TAG=""; MODES_R=""; CTX_R="$CTX"; STAGES_R="$STAGES"; NP_R="$N_PREDICT"; PP0_R="$PP0_SIZES"
 DEVICES_R=""; BIN_R="$BIN"; MODEL_R="$MODEL"; PORT_R="$PORT"; DO_REAL=1; REUSE=0
+PROFILE=0; MODE_SPECS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --modes) MODES_R="$2"; shift 2;;
@@ -26,18 +30,23 @@ while [ $# -gt 0 ]; do
     --port) PORT_R="$2"; shift 2;;
     --no-real) DO_REAL=0; shift;;
     --reuse) REUSE=1; shift;;
+    --profile) PROFILE=1; shift;;
+    --mode-spec) MODE_SPECS+=("$2"); shift 2;;
     -*) echo "unknown option: $1"; exit 1;;
     *) TAG="$1"; shift;;
   esac
 done
-[ -z "$TAG" ] && { echo "usage: run-bench.sh <tag> [--modes a,b] [--devices ...] [--ctx N] [--stages S] [--n-predict N] [--no-real] [--reuse]"; exit 1; }
+[ -z "$TAG" ] && { echo "usage: run-bench.sh <tag> [--modes a,b] [--devices ...] [--ctx N] [--stages S] [--n-predict N] [--no-real] [--reuse] [--profile | --mode-spec name|dev|split]"; exit 1; }
 case "$TAG" in */*|.*) echo "ERROR: tag '$TAG' must not contain '/' or start with '.'"; exit 1;; esac
 [ -z "$MODEL_R" ] && { echo "ERROR: MODEL is not set - put it in bench.conf or bench.local.conf (see README)"; exit 1; }
 command -v "$BIN_R" >/dev/null 2>&1 || [ -x "$BIN_R" ] || { echo "ERROR: binary '$BIN_R' not found"; exit 1; }
 
-# --devices always rebuilds the standard mode set (layer/tensor on all, single on the first),
-# overriding a MODES array defined in bench.conf/bench.local.conf
-if [ -n "$DEVICES_R" ]; then
+# mode selection precedence: --profile > --mode-spec > --devices > MODES (conf) > auto
+if [ "$PROFILE" = 1 ]; then
+  MODES=("profile|$DEVICES|")
+elif [ ${#MODE_SPECS[@]} -gt 0 ]; then
+  MODES=("${MODE_SPECS[@]}")
+elif [ -n "$DEVICES_R" ]; then
   DEVICES="$DEVICES_R"
   SD="$SINGLE_DEV"; [ "$SD" = auto ] && SD="${DEVICES%%,*}"
   MODES=("layer|$DEVICES|layer" "tensor|$DEVICES|tensor" "single|$SD|")
@@ -45,6 +54,9 @@ elif ! declare -p MODES >/dev/null 2>&1; then
   SD="$SINGLE_DEV"; [ "$SD" = auto ] && SD="${DEVICES%%,*}"
   MODES=("layer|$DEVICES|layer" "tensor|$DEVICES|tensor" "single|$SD|")
 fi
+for m in "${MODES[@]}"; do
+  case "$m" in *"|"*) ;; *) echo "ERROR: bad mode spec '$m' (expected name|device|split)"; exit 1;; esac
+done
 
 SEL=()
 for m in "${MODES[@]}"; do

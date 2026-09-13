@@ -10,6 +10,24 @@ One config file, one command, no adjustments: for each mode it runs a context-de
 
 *Reference example: 2× Tesla V100 (PG500-216 + V100-PCIE, PCIe 3.0 x8/x8, no NVLink), Qwen3.8-27B UD-Q4_K_M at a 262k target. Result: tensor split wins decode at every depth (+32% at depth 0 → +66% at 260k); layer split's decode equals the single-GPU rate — the split buys VRAM, not speed.*
 
+## Scope, compatibility, audience
+
+**What you get** — per machine, one command: a measured answer (layer vs tensor vs single-GPU), a comparison figure (ja/en), and the raw evidence (`run-info.json`, per-stage JSON, sampler logs) someone else can check.
+
+**Build independence** — the harness only talks to a `llama-server` binary over HTTP (`/completion` and its `timings` fields). There is no SM/architecture-specific code: use a CUDA build for any architecture, or another backend (ROCm, Vulkan, Metal, CPU) — the binary is just a `bench.conf` value. NVIDIA-only extras (foreign-process guard, GPU sampler) auto-degrade to off elsewhere; speculative decoding is optional (`SPEC_ARGS=""`). The server launch command is fully configurable (see the FAQ); `LAUNCH_PREFIX` covers wrappers like `numactl`/`taskset`/`env`. **Validation status:** exercised end-to-end on Linux + CUDA (sm70, 2×V100); other backends/architectures are untested — start with the 4-minute smoke.
+
+**Who it's for** — anyone who has to answer "should I split this model across GPUs, and which way?": workstation builders, single-box LLM operators, and AI agents (next section). The numbers are environment-specific by design; what stays constant across users is the protocol and the evidence format.
+
+## Designed to be driven by AI agents
+
+The whole workflow is non-interactive and machine-checkable, so an agent can run it unattended:
+
+- **One command, one config file** — everything lives in `bench.conf`/`bench.local.conf`; no prompts, no TUIs.
+- **Detached by design** — launch with `setsid nohup bash run-bench.sh <tag> … &` and poll `runs/<tag>.log` for the `BENCH-DONE` marker; failures print `BENCH-ABORT: …` and exit non-zero, so callers never have to guess.
+- **Machine-readable results** — `run-info.json` (binary sha256, modes/devices, ctx, KV type, launch prefix) plus per-stage `results-*.json`; figures are regenerated from JSON alone (`plot_bench.py --dir …`, no re-measurement).
+- **Static gates** — `check.sh` (bash -n, py_compile, optional pyflakes), run-dir reuse protection, and a foreign-process guard that aborts if someone else starts compute on the measured GPUs.
+- **Deterministic protocol** — fixed stages, fixed generation length, fixed corrections: runs compare like runs.
+
 ## What it measures (and why this way)
 
 1. **Depth ladder, context reuse** — the server receives one prompt that grows stage by stage (0 → 32k → … → target). Each stage reports the *incremental* prefill rate (`prompt_per_second`), then generates N tokens (`ignore_eos`, 1000 by default) whose steady rate is decode (`predicted_per_second`). This mirrors real agent traffic: a long prompt, then generation at depth.
@@ -55,6 +73,13 @@ One mode, full ladder (e.g. to reproduce a single arm):
 bash run-bench.sh t1 --modes tensor
 ```
 
+Just the prefill/decode numbers for one configuration (no layer/tensor comparison):
+
+```bash
+bash run-bench.sh p1 --profile                              # current DEVICES, default split -> 2-panel figure
+bash run-bench.sh p2 --mode-spec "myarm|CUDA0,CUDA1|tensor" # arbitrary arm(s) with custom names
+```
+
 ## Reading the figure
 
 | panel | content |
@@ -69,7 +94,7 @@ Endpoint numbers sit inside the right edge of each panel — bold = measured, li
 | option | flag / config | effect |
 |---|---|---|
 | vs-single panel | `--vs off` · `VS_PANEL=off` (bench.conf) | **panel ④ disappears** — for runs without a single-GPU baseline, or when you don't want the comparison |
-| real-operation estimate | `--estimate off` | hide the thin dashed curves and the factor note |
+| real-operation estimate | `--estimate off` · `--no-real` (at run time) | the thin dashed curves come from this run's real-prompt factor and appear for **every measured series** — whether or not a single-GPU baseline is included; `--estimate off` hides them, `--no-real` skips measuring the factor at all |
 | baseline mode | `--baseline <mode>` · `BASELINE` (bench.conf) | which mode panel ④ compares against (default `single`; auto-hidden when that mode is not in the run) |
 | series subset | `--series layer,tensor` | plot only the given runs |
 | language | `--lang ja` · `--lang en` | Japanese / English figure |
@@ -92,6 +117,7 @@ Re-render without re-measuring:
 - **Re-running with the same tag?** Refused by design: stale `results-*-pp0.json` / `results-real.json` from the older run would silently mix into the new figures. Use a new tag (`--reuse` overrides, only for deliberate appends).
 - **Can I skip the single-GPU comparison?** Yes, two ways: don't run that mode (`--modes layer,tensor` — panel ④ auto-hides and you save the single-GPU run time), or keep the run and set `VS_PANEL=off` in `bench.conf` (for a one-off re-render: `--vs off`).
 - **Can I change how the server is launched?** The argv is assembled from `bench.conf` (`BIN`, `LAUNCH_PREFIX`, `MODEL`, `MMPROJ`, `DEVICES`/`MODES`, `NGL`, `THREADS`, `FA`, `JINJA`, `KV_K/V`, `SPEC_ARGS`, `SPEC_DEVICE`, `LOAD_MODE`, `CACHE_ARGS`, `HOST`, `PORT`, `EXTRA_ARGS`). Append arbitrary flags with `EXTRA_ARGS`, prefix wrappers (`numactl`, `taskset`, `env …`) with `LAUNCH_PREFIX`, or point `BIN` at a wrapper script. The exact argv inputs and binary hash are recorded in `run-info.json` for every run — that is the evidence other people compare against.
+- **Can I measure one configuration only (no comparison)?** Yes: `--profile` measures the current `DEVICES` as a single arm and renders the 2-panel prefill/decode figure; `--mode-spec "name|device|split"` (repeatable) defines arbitrary arms, e.g. `--mode-spec "gpu0|CUDA0|"` for a single-card profile.
 
 ## Files
 

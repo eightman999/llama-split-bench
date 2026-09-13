@@ -49,6 +49,8 @@ def disp(tag, lang):
         if not dev:
             return {"ja": "単一GPU", "en": "single GPU"}[lang]
         return {"ja": f"単一GPU ({dev}のみ)", "en": f"single GPU ({dev} only)"}[lang]
+    if dev:
+        return f"{tag} ({dev})"
     return tag
 
 

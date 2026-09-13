@@ -10,6 +10,24 @@
 
 *参考例: Tesla V100 ×2 (PG500-216 + V100-PCIE、PCIe 3.0 x8/x8、NVLinkなし)、Qwen3.8-27B UD-Q4_K_M、262kコンテキスト。結果: tensor分割は全深度でdecodeが勝ち(深さ0で +32% → 260kで +66%)。layer分割のdecodeは単一GPUと同一で、分割は「速度」ではなく「VRAM」を買うものだと分かります。*
 
+## スコープ・対応環境・対象読者
+
+**得られるもの** — マシンごとに1コマンドで: 実測に基づく答え(layer / tensor / 単一GPU)、比較図(日英)、そして他者が検証できる生の証跡(`run-info.json`、段ごとのJSON、サンプラログ)。
+
+**ビルド・環境への依存** — 本ツールは `llama-server` バイナリと HTTP(`/completion` とその `timings` フィールド)しか使いません。SM(アーキテクチャ)固有のコードは一切なく、任意アーキテクチャ向けのCUDAビルドでも、他バックエンド(ROCm、Vulkan、Metal、CPU)でも動きます(バイナリは `bench.conf` の値)。NVIDIA限定の付加機能(外部プロセスガード、GPUサンプラ)は他環境では自動でオフに縮退し、投機デコードは任意(`SPEC_ARGS=""` で無効)。サーバの起動コマンドは完全に設定可能(FAQ参照)で、`LAUNCH_PREFIX` が `numactl`/`taskset`/`env` 等の前置に対応します。**検証状況:** Linux + CUDA(sm70、V100×2)でE2E検証済み。他バックエンド/アーキテクチャは未検証 — まず4分のスモークを実行してください。
+
+**対象読者** — 「このモデルをGPUに分割すべきか、どの方式か」に答える必要がある人: ワークステーション構築者、単機LLM運用者、そしてAIエージェント(次節)。数値は仕様として環境依存で、ユーザー間で一定なのは手順と証跡の形式です。
+
+## AIエージェントに使わせる前提の設計
+
+ワークフロー全体が非対話・機械可読で、エージェントが無人で回せるようになっています:
+
+- **1コマンド+1設定ファイル** — 設定は `bench.conf`/`bench.local.conf` のみ。対話プロンプトもTUIもなし。
+- **デタッチ前提** — `setsid nohup bash run-bench.sh <tag> … &` で起動し、`runs/<tag>.log` の `BENCH-DONE` をポーリング。失敗時は `BENCH-ABORT: …` を出して非ゼロ終了するので、呼び出し側が推測する必要はありません。
+- **機械可読の結果** — `run-info.json`(バイナリsha256、モード/デバイス、ctx、KV型、起動プレフィックス)と段ごとの `results-*.json`。図はJSONだけから再生成できます(`plot_bench.py --dir …`、再計測不要)。
+- **静的ゲート** — `check.sh`(bash -n、py_compile、任意でpyflakes)、タグ再利用の保護、計測対象GPUに他プロセスが乗ったら中断する外部プロセスガード。
+- **決定的な手順** — 段構成・生成長・補正方法が固定なので、実行同士を比較できます(「なんとなく」ではなく)。
+
 ## 計測内容(この方式にした理由)
 
 1. **深度ラダー(コンテキスト再利用)** — サーバには段階ごとに伸びる1本のプロンプトを送ります(0 → 32k → … → target)。各段で*増分*のprefill速度(`prompt_per_second`)を記録し、続けてNトークン(`ignore_eos`、既定1000)を生成した定常速度がdecode(`predicted_per_second`)です。実際のエージェント利用(長いプロンプト→深い位置での生成)を模した形です。
@@ -55,6 +73,13 @@ bash run-bench.sh smoke --stages 0,4000 --n-predict 100 --ctx 8192 \
 bash run-bench.sh t1 --modes tensor
 ```
 
+prefill/decode だけを計測したい場合(layer/tensor比較は不要):
+
+```bash
+bash run-bench.sh p1 --profile                              # 現在のDEVICES・既定splitで2パネル図
+bash run-bench.sh p2 --mode-spec "myarm|CUDA0,CUDA1|tensor" # 名前と構成を自由に指定
+```
+
 ## 図の読み方
 
 | パネル | 内容 |
@@ -69,7 +94,7 @@ bash run-bench.sh t1 --modes tensor
 | オプション | フラグ / 設定 | 効果 |
 |---|---|---|
 | 対単一GPUパネル | `--vs off` · `VS_PANEL=off` (bench.conf) | **④が消える** — 単一GPUを測っていない場合、または比較が不要な場合 |
-| 実運用推定線 | `--estimate off` | 薄い破線と補正係数の注記を非表示 |
+| 実運用推定線 | `--estimate off` · `--no-real` (実行時) | 薄い破線はその実行の実プロンプト補正係数から描かれ、**単一GPUの有無に関係なく、計測した全系列に表示**されます。`--estimate off` で非表示、`--no-real` なら補正係数そのものを計測しません |
 | ベースライン | `--baseline <モード名>` · `BASELINE` (bench.conf) | ④が比較する相手(既定=`single`。そのモードが実行に無ければ自動非表示) |
 | 系列の絞り込み | `--series layer,tensor` | 指定した実行だけを描画 |
 | 言語 | `--lang ja` · `--lang en` | 日本語 / 英語の図 |
@@ -92,6 +117,7 @@ bash run-bench.sh t1 --modes tensor
 - **同じタグで再実行すると?** 仕様として拒否します(前回の`results-*-pp0.json`/`results-real.json`が新しい図に混入するため)。新しいタグを使ってください(`--reuse`は意図的な追記専用)。
 - **単一GPUとの比較はいらない場合は?** 2通り: そのモードを実行しない(`--modes layer,tensor` — ④は自動非表示になり、単一GPU計測の時間も節約)、または`bench.conf`で`VS_PANEL=off`(単発の描き直しなら`--vs off`)。
 - **サーバの起動コマンドは変えられる?** argvは`bench.conf`から組み立てます(`BIN`, `LAUNCH_PREFIX`, `MODEL`, `MMPROJ`, `DEVICES`/`MODES`, `NGL`, `THREADS`, `FA`, `JINJA`, `KV_K/V`, `SPEC_ARGS`, `SPEC_DEVICE`, `LOAD_MODE`, `CACHE_ARGS`, `HOST`, `PORT`, `EXTRA_ARGS`)。任意フラグは`EXTRA_ARGS`で追記、`numactl`/`taskset`/`env`等の前置は`LAUNCH_PREFIX`、ラッパースクリプトを使うなら`BIN`に指定。実際のargv構成要素とバイナリのハッシュは毎回`run-info.json`に記録されます(他者と比較する際の証跡)。
+- **1構成だけ計測したい(比較不要)場合は?** `--profile` で現在の `DEVICES` を1本の腕として計測し、prefill/decodeの2パネル図を生成します。`--mode-spec "名前|デバイス|split"`(複数指定可)で任意の腕を定義できます(例: `--mode-spec "gpu0|CUDA0|"` で単カード)。
 
 ## ファイル構成
 
