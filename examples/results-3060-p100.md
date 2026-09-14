@@ -70,10 +70,11 @@ Run `full-2`, four arms measured in one run.
 | 16k | **49.4** | 36.0 | 48.4 | 30.9 |
 | 31k | 45.2 | 33.5 | **45.9** | 28.9 |
 
-**The single fast GPU beats every split.** Prefill on the 3060 alone is 1.7–2.3× the
-best split; decode leads until ~31k, where tensor finally draws level. When a model
-fits on the faster card, splitting it across a fast and a slow card costs throughput —
-the slow card sets the pace. Splitting here buys VRAM headroom, nothing else.
+**The single fast GPU beats every split.** Prefill on the 3060 alone is 1.69–1.84×
+layer (the faster split for prefill) and 2.23–2.29× tensor; decode leads until ~31k,
+where tensor finally draws level. When a model fits on the faster card, splitting it
+across a fast and a slow card costs throughput — the slow card sets the pace.
+Splitting here buys VRAM headroom, nothing else.
 
 This is worth stating because a `single` baseline pinned to the *wrong* card inverts
 the reading: measured against the P100, tensor looks like a +54% win. Against the
